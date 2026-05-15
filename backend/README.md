@@ -2,21 +2,24 @@
 
 **Estado actual:**
 
-**v0.47.3** — Esqueleto mínimo.
+**v0.47.4** — Stores JSON mínimos.
 
 **Incluye:**
 
-- FastAPI;
-- CORS;
-- `GET /health`.
+- `GET /health`;
+- `GET /events`;
+- `GET /tasks`;
+- `GET /notes`;
+- stores JSON simples;
+- `thread_state_store`.
 
 **Todavía no incluye:**
 
 - `POST /message`;
-- stores;
 - GPT;
-- motor de contexto;
-- endpoints de eventos/tareas/notas.
+- engine;
+- `payload_builder`;
+- acciones de creación desde mensaje.
 
 El backend legacy está archivado en:
 
