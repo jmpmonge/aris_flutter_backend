@@ -1,0 +1,178 @@
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(_REPO_ROOT / ".env")
+
+from backend.core.logging_setup import configure_logging
+
+configure_logging()
+
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+
+from backend.core.assistant_engine import AssistantEngine
+from backend.models.assistant_message import (
+    AssistantResponse,
+    NotePatchBody,
+    TaskPatchBody,
+    UserMessage,
+)
+from backend.storage.events_store import EventsStore
+from backend.storage.focus_store import FocusStore
+from backend.storage.history_store import HistoryStore
+from backend.storage.notes_store import NotesStore
+from backend.storage.pending_action_store import PendingActionStore
+from backend.storage.tasks_store import TasksStore
+
+app = FastAPI()
+pending_store = PendingActionStore()
+history_store = HistoryStore()
+notes_store = NotesStore()
+tasks_store = TasksStore()
+events_store = EventsStore()
+focus_store = FocusStore()
+engine = AssistantEngine(
+    pending_store,
+    focus_store=focus_store,
+    tasks_store=tasks_store,
+    notes_store=notes_store,
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+
+@app.post("/message")
+def message(body: UserMessage):
+    reply_text, intent_type, stored_override, ui_hint = engine.process_message(body.text)
+    payload = stored_override if stored_override is not None else body.text
+    if intent_type == "nota":
+        saved_note: dict | None = None
+        if isinstance(payload, dict):
+            # v0.21.4d — Si trae title o content, lo guardamos estructurado.
+            title = (payload.get("title") or "").strip() if payload.get("title") else ""
+            content = (payload.get("content") or "").strip() if payload.get("content") else ""
+            if title or content:
+                saved_note = notes_store.add_note(
+                    {"title": title or None, "content": content or body.text}
+                )
+            else:
+                saved_note = notes_store.add_note(body.text)
+        else:
+            saved_note = notes_store.add_note(str(payload))
+        # v0.21.9 — Foco multi-entidad.
+        if isinstance(saved_note, dict) and saved_note.get("id"):
+            engine.note_entity_persisted(
+                kind="note",
+                entity_id=str(saved_note["id"]),
+                label=(saved_note.get("title") or saved_note.get("content") or "")[:80],
+                operation="create_note",
+            )
+    elif intent_type == "tarea":
+        if isinstance(payload, dict):
+            saved_task = tasks_store.add_task(payload)
+        else:
+            saved_task = tasks_store.add_task(str(payload))
+        if isinstance(saved_task, dict) and saved_task.get("id"):
+            engine.note_entity_persisted(
+                kind="task",
+                entity_id=str(saved_task["id"]),
+                label=saved_task.get("title"),
+                operation="create_task",
+            )
+    elif intent_type == "calendario":
+        if isinstance(payload, dict):
+            saved = events_store.add_event(payload)
+        else:
+            saved = events_store.add_event(str(payload))
+        if isinstance(saved, dict) and saved.get("id"):
+            events_store.set_focused_event_id(str(saved["id"]))
+            # v0.21.9 — También actualizamos el foco multi-entidad.
+            engine.note_entity_persisted(
+                kind="event",
+                entity_id=str(saved["id"]),
+                label=saved.get("title"),
+                operation="create_event",
+            )
+    history_store.save_interaction(body.text, reply_text, intent_type)
+    return AssistantResponse(text=reply_text, type="assistant", ui_hint=ui_hint)
+
+
+@app.get("/history")
+def history():
+    return history_store.get_history()
+
+
+@app.get("/notes")
+def notes():
+    return notes_store.get_notes()
+
+
+@app.patch("/notes/{note_id}")
+def patch_note(note_id: str, body: NotePatchBody):
+    content = (body.content or "").strip()
+    if not content:
+        raise HTTPException(
+            status_code=400,
+            detail="El contenido de la nota no puede estar vacío.",
+        )
+    updated = notes_store.update_note(note_id, content)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Nota no encontrada")
+    return updated
+
+
+@app.get("/tasks")
+def tasks():
+    return tasks_store.get_tasks()
+
+
+@app.get("/events")
+def events():
+    return events_store.get_events()
+
+
+@app.patch("/tasks/{task_id}")
+def patch_task(task_id: str, body: TaskPatchBody):
+    title = (body.title or "").strip()
+    if not title:
+        raise HTTPException(
+            status_code=400,
+            detail="El título de la tarea no puede estar vacío.",
+        )
+    updated = tasks_store.update_task(task_id, title)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Tarea no encontrada")
+    return updated
+
+
+@app.patch("/tasks/{task_id}/complete")
+def complete_task(task_id: str):
+    task = tasks_store.complete_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Tarea no encontrada")
+    return task
+
+
+@app.delete("/notes/{note_id}")
+def delete_note(note_id: str):
+    if not notes_store.delete_note(note_id):
+        raise HTTPException(status_code=404, detail="Nota no encontrada")
+    return {"status": "deleted", "id": note_id}
+
+
+@app.delete("/tasks/{task_id}")
+def delete_task(task_id: str):
+    if not tasks_store.delete_task(task_id):
+        raise HTTPException(status_code=404, detail="Tarea no encontrada")
+    return {"status": "deleted", "id": task_id}

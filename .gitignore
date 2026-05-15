@@ -1,0 +1,33 @@
+# Sistema y editores
+.DS_Store
+.vscode/
+.idea/
+
+# Flutter (convención aris_flutter/ y carpeta actual del repo)
+aris_flutter/.dart_tool/
+aris_flutter/build/
+aris_flutter/android/.gradle/
+aris_flutter/ios/Pods/
+aris_flutter/ios/.symlinks/
+aris_flutter_v0.22/.dart_tool/
+aris_flutter_v0.22/build/
+aris_flutter_v0.22/android/.gradle/
+aris_flutter_v0.22/ios/Pods/
+aris_flutter_v0.22/ios/.symlinks/
+
+# Python / FastAPI
+aris_backend/.venv/
+aris_backend/venv/
+aris_backend/env/
+__pycache__/
+*.pyc
+
+# Secretos y datos locales
+.env
+.env.local
+aris_backend/.env
+aris_backend/data/
+
+# Bases de datos locales
+*.sqlite
+*.db
