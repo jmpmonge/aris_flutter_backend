@@ -1,14 +1,28 @@
 # Backend mínimo v0.47
 
-Esta carpeta contendrá el backend mínimo reconstruido de Aris.
+**Estado actual:**
 
-El backend anterior está archivado en:
+**v0.47.3** — Esqueleto mínimo.
+
+**Incluye:**
+
+- FastAPI;
+- CORS;
+- `GET /health`.
+
+**Todavía no incluye:**
+
+- `POST /message`;
+- stores;
+- GPT;
+- motor de contexto;
+- endpoints de eventos/tareas/notas.
+
+El backend legacy está archivado en:
 
 `backend_legacy_v046/`
 
-En esta fase **v0.47.2** todavía no hay backend funcional.
-
-La reconstrucción seguirá los documentos:
+La arquitectura se guía por:
 
 `docs/architecture/backend_minimal_v047/`
 
