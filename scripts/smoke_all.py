@@ -13,6 +13,8 @@ ROOT = Path(__file__).resolve().parent
 def main() -> int:
     scripts = [
         ROOT / "smoke_v0442_time_ambiguity.py",
+        ROOT / "smoke_v045b_no_raw_calendar_fallback.py",
+        ROOT / "smoke_v045c_create_not_update.py",
     ]
     for s in scripts:
         if not s.is_file():

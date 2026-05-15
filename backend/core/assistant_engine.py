@@ -441,6 +441,94 @@ def _looks_like_calendar_action(text: str) -> bool:
     return False
 
 
+# v0.45c — Creación explícita de cita/evento: no debe clasificarse como update
+# del evento enfocado aunque el modelo equivoque el operation.
+_CALENDAR_CREATE_BLOCK_UPDATE_RE = re.compile(
+    r"\b("
+    r"cambia|cambiar|modifica|modificar|actualiza|actualizar|mueve|mover|"
+    r"traslada|trasladar|reubica|reubicar|borra|borrar|elimina|eliminar|"
+    r"cancela|cancelar|suprime|anula|aplaza|adelanta|reprograma"
+    r")\b",
+    flags=re.IGNORECASE,
+)
+_CALENDAR_ADD_TO_EXISTING_RE = re.compile(
+    r"\b(añade|anade|agrega|incorpora)\b.*\b(la|el|esa|esta|última|ultima)\s+"
+    r"(cita|reunion|evento|encuentro)\b",
+    flags=re.IGNORECASE,
+)
+_CALENDAR_CREATE_QUERY_RE = re.compile(
+    r"\b("
+    r"que\s+tengo|qué\s+tengo|a\s+que\s+hora|a\s+qué\s+hora|cuando\s+tengo|cuándo\s+tengo|"
+    r"dime\s+(?:las\s+)?citas|listar|que\s+hay\s+para|qué\s+hay\s+para|"
+    r"cuando\s+es|cuándo\s+es|donde\s+es|dónde\s+es"
+    r")\b",
+    flags=re.IGNORECASE,
+)
+_PONLE_RE = re.compile(r"\bponle\b", flags=re.IGNORECASE)
+
+
+def _looks_like_calendar_create_request(text: str) -> bool:
+    """True si el usuario pide crear/agendar/programar una cita o evento nuevo.
+
+    Complementa `_looks_like_calendar_action` con frases tipo «quiero poner una cita»
+    donde el verbo no cae en los tokens cortos de agenda. Es **falsa** ante verbos de
+    modificación («cambia la cita», …) y ante añadir datos a una cita ya existente
+    («añade a María a la cita»).
+    """
+    if not text:
+        return False
+    t = _strip_accents(text.lower())
+    t = re.sub(r"[^\w\s]+", " ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    if not t:
+        return False
+    if _PONLE_RE.search(t):
+        return False
+    if _CALENDAR_CREATE_QUERY_RE.search(t):
+        return False
+    has_noun = any(n in t for n in _CALENDAR_NOUNS)
+    if not has_noun:
+        return False
+    if _CALENDAR_ADD_TO_EXISTING_RE.search(t):
+        return False
+    if _CALENDAR_CREATE_BLOCK_UPDATE_RE.search(t):
+        return False
+    if _looks_like_calendar_action(text):
+        return True
+    if re.search(
+        r"\bquiero\s+(crear|poner|agendar|programar|meter|guardar)\b",
+        t,
+    ):
+        return True
+    if re.search(
+        r"\b(?:crear|creame|hazme|haz)\s+(?:una\s+|un\s+)?"
+        r"(?:cita|reunion|evento|encuentro)\b",
+        t,
+        flags=re.IGNORECASE,
+    ):
+        return True
+    if re.search(
+        r"\bpon(?:me)?\s+(?:una\s+|un\s+)?(?:cita|reunion|evento|encuentro)\b",
+        t,
+        flags=re.IGNORECASE,
+    ):
+        return True
+    if re.search(
+        r"\b(?:mete|meteme)\s+una\s+(?:cita|reunion|evento|encuentro)\b",
+        t,
+        flags=re.IGNORECASE,
+    ):
+        return True
+    if re.search(
+        r"\b(?:fija|fijame|coloca|colocame|establece|establecer)\s+"
+        r"(?:una\s+|un\s+)?(?:cita|reunion|evento|encuentro)\b",
+        t,
+        flags=re.IGNORECASE,
+    ):
+        return True
+    return False
+
+
 def _is_bare_calendar_intent(text: str) -> bool:
     """True si el mensaje es claramente «agéndame una cita» (sin fecha, hora, persona ni lugar).
 
@@ -3470,9 +3558,78 @@ class AssistantEngine:
         )
         return (reply, "consulta", None, None)
 
+    def _reroute_calendar_create_from_update(
+        self, raw: str, unified: dict[str, Any]
+    ) -> tuple[str, str, str | dict | None, str | None]:
+        """v0.45c — El motor dijo ``update_calendar_event`` pero el texto huele a nueva cita.
+
+        Fusiona ``calendar_update.updates`` y ``calendar_event`` y delega en el flujo
+        de creación, o abre pending mínima. No llama a ``update_event`` ni mueve foco.
+        """
+        cup = unified.get("calendar_update") or {}
+        upd_raw = cup.get("updates")
+        upd: dict[str, Any] = upd_raw if isinstance(upd_raw, dict) else {}
+
+        ce_src = unified.get("calendar_event")
+        ev: dict[str, Any] = {}
+        if isinstance(ce_src, dict):
+            for k, val in ce_src.items():
+                if val is None:
+                    continue
+                if k == "participants" and isinstance(val, list) and not val:
+                    continue
+                if isinstance(val, str) and not val.strip():
+                    continue
+                ev[k] = val
+
+        for key in ("title", "date_text", "time_text", "location", "description"):
+            val = upd.get(key)
+            if val is None:
+                continue
+            if isinstance(val, str) and not val.strip():
+                continue
+            ev[key] = val
+
+        dm = upd.get("duration_minutes")
+        if dm is not None:
+            try:
+                ev["duration_minutes"] = int(dm)
+            except (TypeError, ValueError):
+                pass
+
+        pu = upd.get("participants")
+        if isinstance(pu, list) and pu:
+            plist = [str(p).strip() for p in pu if str(p).strip()]
+            if plist:
+                ev["participants"] = plist
+
+        has_useful = bool(
+            (str(ev.get("title") or "").strip())
+            or (str(ev.get("date_text") or "").strip())
+            or (str(ev.get("time_text") or "").strip())
+            or (str(ev.get("location") or "").strip())
+            or (isinstance(ev.get("participants"), list) and len(ev.get("participants") or []) > 0)
+            or (str(ev.get("description") or "").strip())
+        )
+
+        new_unified = dict(unified)
+        new_unified["operation"] = "create_calendar_event"
+        new_unified["calendar_event"] = ev
+
+        if not has_useful:
+            logger.info("v0.45c reroute create: sin datos fusionables → pending")
+            return self._open_calendar_pending(raw)
+        logger.info("v0.45c reroute create: datos útiles → create_calendar_event")
+        return self._unified_handle_calendar_create(raw, new_unified)
+
     def _unified_handle_calendar_update(
         self, raw: str, unified: dict[str, Any]
-    ) -> tuple[str, str, None, None]:
+    ) -> tuple[str, str, str | dict | None, str | None]:
+        if _looks_like_calendar_create_request(raw):
+            logger.info(
+                "v0.45c: update_calendar_event bloqueado porque raw parece creación explícita"
+            )
+            return self._reroute_calendar_create_from_update(raw, unified)
         # v0.21.9 — Bloqueo determinista: si el mensaje menciona explícitamente
         # "tarea/nota" y NO menciona "evento/cita/reunión/calendario", no
         # ejecutamos update_calendar_event aunque el motor unificado lo
@@ -3978,6 +4135,12 @@ class AssistantEngine:
             if op == "general_query":
                 logger.info("Motor unificado: general_query → consulta general")
                 return self._unified_handle_general(raw, unified)
+            if op == "update_calendar_event" and _looks_like_calendar_create_request(raw):
+                logger.info(
+                    "v0.45c: update_calendar_event interceptado en _process_fresh; "
+                    "redirigiendo a creación/pending"
+                )
+                return self._reroute_calendar_create_from_update(raw, unified)
             return self._dispatch_unified_motor(raw, unified)
 
         logger.info("Motor unificado: no disponible; flujo de respaldo")
@@ -4166,15 +4329,32 @@ class AssistantEngine:
         cal = try_calendar_event_extraction(raw)
         if cal is None:
             logger.warning(
-                "Calendario: extracción GPT no disponible o fallida; fallback add_event con texto crudo"
+                "Calendario: extracción GPT no disponible o fallida; "
+                "pending o consulta sin persistir texto crudo (v0.45b)"
             )
-            return ("He preparado este evento provisional.", "calendario", raw, None)
+            if (
+                self._keywords_match(raw, self._KW_CALENDARIO)
+                or _looks_like_calendar_action(raw)
+                or _looks_like_calendar_intent(raw)
+            ):
+                return self._open_calendar_pending(raw)
+            return (
+                "No he podido estructurar eso como evento de calendario. "
+                "¿Puedes indicarme día, hora y con quién o dónde?",
+                "consulta",
+                None,
+                None,
+            )
 
         if cal.get("intent") == "not_calendar":
             logger.info(
-                "Calendario: GPT indica not_calendar; fallback add_event con texto crudo"
+                "Calendario: GPT indica not_calendar; sin persistir evento crudo (v0.45b)"
             )
-            return ("He preparado este evento provisional.", "calendario", raw, None)
+            msg = (
+                "No he podido estructurar ese evento. "
+                "¿Puedes indicarme día, hora y con quién o dónde es?"
+            )
+            return (msg, "ambiguo", None, None)
 
         if self._calendar_direct_save_ok(cal):
             payload = self._store_payload_from_cal(raw, cal)

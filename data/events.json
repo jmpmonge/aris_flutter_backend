@@ -1,0 +1,71 @@
+[
+  {
+    "id": "45bb1e8e-e4a1-4afd-8946-3555dca30a5b",
+    "title": "quiero poner una cita mañana a las 7 con Luis",
+    "created_at": "2026-05-15T16:38:38.956669+00:00"
+  },
+  {
+    "id": "1a71786f-ad98-4de3-80ac-fc26da33346e",
+    "title": "cita domingo a las 1 pm",
+    "created_at": "2026-05-15T16:41:25.518554+00:00"
+  },
+  {
+    "id": "e45bc8d3-57c4-4af8-9a96-3c383cafb9c2",
+    "title": "quiero poner una cita mañana a las 7 con Luis",
+    "created_at": "2026-05-15T16:44:22.991907+00:00"
+  },
+  {
+    "id": "1e241eb3-e273-46a9-b882-5a3401913320",
+    "title": "quiero poner una cita mañana a las 7 con Luis",
+    "created_at": "2026-05-15T16:44:41.027117+00:00"
+  },
+  {
+    "id": "d5c82ff8-8c12-41c4-9e22-332f1067acb6",
+    "title": "quiero una cita mañana a las 7",
+    "created_at": "2026-05-15T16:53:32.725435+00:00"
+  },
+  {
+    "id": "893831c6-e93e-4847-86a6-341f506bd50f",
+    "title": "una cita mañana a las 5",
+    "created_at": "2026-05-15T16:53:49.562998+00:00"
+  },
+  {
+    "id": "413daff1-d836-4e21-b9b5-e9b45d60631e",
+    "title": "cita mañana a las 5",
+    "created_at": "2026-05-15T17:07:32.422418+00:00"
+  },
+  {
+    "id": "da9bf1d2-6a12-4a45-b678-1b428ee25b7a",
+    "title": "cita domingo a las 5",
+    "created_at": "2026-05-15T17:08:01.776364+00:00"
+  },
+  {
+    "id": "a8a89e64-66ba-4f55-a0c7-b94f3d8f8dad",
+    "title": "cita domiento a las 5",
+    "created_at": "2026-05-15T17:12:43.090186+00:00"
+  },
+  {
+    "id": "aafafdc6-dd85-4bee-a0c2-2ff627bc9c72",
+    "title": "quiero poner una cita mañana a las 7 con Luis",
+    "created_at": "2026-05-15T17:17:43.211393+00:00"
+  },
+  {
+    "id": "af286f60-64ad-4c99-a02a-c1684a6eb139",
+    "title": "quiero una cita para el domingo",
+    "created_at": "2026-05-15T17:18:10.447853+00:00"
+  },
+  {
+    "id": "78e22a9f-d4cd-4e29-8e03-4641e5afab4d",
+    "title": "cita con Luis",
+    "created_at": "2026-05-15T17:47:44.625075+00:00",
+    "date_text": "mañana",
+    "time_text": "7",
+    "participants": [
+      "Luis"
+    ],
+    "source_text": "quiero poner una cita mañana a las 7 con Luis",
+    "confidence": 1.0,
+    "needs_confirmation": false,
+    "updated_at": "2026-05-15T17:54:45.582580+00:00"
+  }
+]

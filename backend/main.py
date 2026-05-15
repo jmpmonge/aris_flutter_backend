@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -27,6 +28,8 @@ from backend.storage.history_store import HistoryStore
 from backend.storage.notes_store import NotesStore
 from backend.storage.pending_action_store import PendingActionStore
 from backend.storage.tasks_store import TasksStore
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 pending_store = PendingActionStore()
@@ -93,10 +96,19 @@ def message(body: UserMessage):
                 operation="create_task",
             )
     elif intent_type == "calendario":
+        saved: dict | None = None
         if isinstance(payload, dict):
             saved = events_store.add_event(payload)
+        elif isinstance(payload, str):
+            # v0.45b — No persistir texto bruto como evento (evita título = mensaje completo).
+            logger.warning(
+                "main.message: intent calendario con payload str omitido (defensivo v0.45b)"
+            )
         else:
-            saved = events_store.add_event(str(payload))
+            logger.warning(
+                "main.message: intent calendario con payload no dict/str omitido (%s)",
+                type(payload).__name__,
+            )
         if isinstance(saved, dict) and saved.get("id"):
             events_store.set_focused_event_id(str(saved["id"]))
             # v0.21.9 — También actualizamos el foco multi-entidad.
