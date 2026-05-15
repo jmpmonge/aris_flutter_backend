@@ -2,7 +2,7 @@
 
 **Estado actual:**
 
-**v0.47.4** — Stores JSON mínimos.
+**v0.47.8** — `POST /message` conectado.
 
 **Incluye:**
 
@@ -10,16 +10,19 @@
 - `GET /events`;
 - `GET /tasks`;
 - `GET /notes`;
-- stores JSON simples;
-- `thread_state_store`.
+- `POST /message`;
+- `ArisMinimalEngine`;
+- cliente GPT mínimo;
+- payload mínimo;
+- stores JSON.
 
 **Todavía no incluye:**
 
-- `POST /message`;
-- GPT;
-- engine;
-- `payload_builder`;
-- acciones de creación desde mensaje.
+- `need_context` real (solo marcador en engine);
+- update/delete complejos;
+- integración Flutter revisada;
+- calendario externo real;
+- envío real de correo.
 
 El backend legacy está archivado en:
 
