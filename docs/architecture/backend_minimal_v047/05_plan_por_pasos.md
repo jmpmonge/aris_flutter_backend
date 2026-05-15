@@ -17,8 +17,9 @@ Roadmap para reconstruir el backend por hitos. Cada hito posterior a v0.47.1 deb
 
 - Mover `backend/` a `backend_legacy_v046/`.
 - No borrar nada.
+- Carpeta nueva `backend/` solo con `__init__.py` y `README.md` hasta v0.47.3.
 
-**Documento de versión:** `docs/version_0_47_2_archive_backend.md` (nombre sugerido)
+**Documento de versión:** `docs/version_0_47_2_archive_legacy_backend.md`
 
 ---
 
@@ -28,7 +29,7 @@ Roadmap para reconstruir el backend por hitos. Cada hito posterior a v0.47.1 deb
 - `main.py` mínimo y `GET /health` únicamente.
 - Sin integración GPT.
 
-**Documento de versión:** `docs/version_0_47_3_skeleton_backend.md` (sugerido)
+**Documento de versión:** `docs/version_0_47_3_backend_skeleton.md`
 
 ---
 
@@ -37,7 +38,7 @@ Roadmap para reconstruir el backend por hitos. Cada hito posterior a v0.47.1 deb
 - Implementar persistencia: eventos, tareas, notas, `thread_state`.
 - Endpoints `GET` de listado según contrato estable.
 
-**Documento de versión:** `docs/version_0_47_4_json_stores.md` (sugerido)
+**Documento de versión:** `docs/version_0_47_4_json_stores.md`
 
 ---
 
