@@ -420,6 +420,10 @@ class EventsStore:
 
         v0.21.5 — usado para agrupar duplicados y detectar solapamientos sin
         depender de un parser real de datetime.
+
+        v0.44.2 — Esta función NO interpreta tarde vs mañana: no suma horas ni
+        convierte «a las 7» automáticamente; eso ocurre sólo en
+        assistant_engine al persistir.
         """
         if value is None:
             return ""

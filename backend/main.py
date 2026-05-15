@@ -106,7 +106,7 @@ def message(body: UserMessage):
                 label=saved.get("title"),
                 operation="create_event",
             )
-    history_store.save_interaction(body.text, reply_text, intent_type)
+    history_store.save_interaction(body.text, reply_text, intent_type, ui_hint)
     return AssistantResponse(text=reply_text, type="assistant", ui_hint=ui_hint)
 
 

@@ -282,6 +282,106 @@ _TIME_HINTS_RE = re.compile(
 )
 
 
+def _parse_time_text_hh_mm(time_text: str) -> tuple[int, int] | None:
+    """Parsea 'H', 'H:MM', 'HH:MM' a enteros; None si no coincide."""
+    s = (time_text or "").strip()
+    if not s:
+        return None
+    m = re.match(r"^(\d{1,2}):(\d{2})$", s)
+    if m:
+        h, mi = int(m.group(1)), int(m.group(2))
+        if 0 <= h <= 23 and 0 <= mi <= 59:
+            return h, mi
+        return None
+    m = re.match(r"^(\d{1,2})$", s)
+    if m:
+        h = int(m.group(1))
+        if 0 <= h <= 23:
+            return h, 0
+    return None
+
+
+def _raw_calendar_time_period_explicit(raw: str) -> bool:
+    """True si hay indicación inequívoca de mañana/tarde/noche o am/pm (v0.44.2)."""
+    ru = _strip_accents((raw or "").lower())
+    if re.search(r"(de la|por la)\s+ma[nñ]ana\b", ru):
+        return True
+    if any(
+        x in ru
+        for x in (
+            "esta tarde",
+            "por la tarde",
+            "de la tarde",
+            "esta noche",
+            "por la noche",
+            "de la noche",
+            "medianoche",
+        )
+    ):
+        return True
+    if re.search(r"\b\d{1,2}\s*[:.]\s*\d{2}\s*(am|pm|a[\s.]?m[\s.]?|p[\s.]?m[\s.]?)\b", ru):
+        return True
+    return False
+
+
+def _coerce_ambiguous_calendar_time_text(raw: str, time_text: str) -> str:
+    """v0.44.2 — Corrige inferencias +12 o 7→14 cuando el literal del usuario es claro.
+
+    Sin periodo explícito (mañana/tarde/noche/am/pm), si el modelo devuelve
+    mh == lh + 12 con lh ≤ 11, se conserva lh y los minutos del modelo.
+
+    También corrige el bug habitual «a las siete» → 14:00 en el modelo.
+    """
+    tt = (time_text or "").strip()
+    if not tt:
+        return tt
+    m_time = _TIME_HINTS_RE.search(raw or "")
+    if not m_time:
+        return tt
+    if _raw_calendar_time_period_explicit(raw or ""):
+        return tt
+
+    lh = int(m_time.group(1))
+    try:
+        lmm = int(m_time.group(2) or "00")
+    except ValueError:
+        lmm = 0
+    lmm = max(0, min(59, lmm))
+
+    if lh >= 12:
+        return tt
+
+    parsed = _parse_time_text_hh_mm(tt)
+    if not parsed:
+        return tt
+    mh, mm = parsed
+
+    if mh == lh + 12:
+        return f"{lh:02d}:{mm:02d}"
+    # Modelo suele equivocarse con las siete y entregar 14:00 (sin ser +12 desde 14h).
+    if lh == 7 and mh == 14:
+        return f"07:{mm:02d}"
+    return tt
+
+
+def _coerce_calendar_time_twice_sources(
+    current_reply: str, original_turn: str, time_text: str
+) -> str:
+    """Aplica corrección ante turno actual y ante el texto original que abrió el pending."""
+    tt = _coerce_ambiguous_calendar_time_text(current_reply or "", time_text)
+    return _coerce_ambiguous_calendar_time_text(original_turn or "", tt)
+
+
+def _calendar_time_text_after_user_message(raw: str, time_val: Any) -> Any:
+    """Aplica v0.44.2 a un time_text opcional antes de pending/persistencia."""
+    if time_val is None:
+        return None
+    s = str(time_val).strip()
+    if not s:
+        return None
+    return _coerce_ambiguous_calendar_time_text(raw or "", s)
+
+
 # v0.21.4c — Detección estricta: el usuario quiere agendar PERO no aporta datos.
 # Sirve para interceptar antes del motor unificado y no perder la intención si
 # GPT clasifica el mensaje como general_query o pregunta de aclaración.
@@ -1015,7 +1115,13 @@ class AssistantEngine:
         return None
 
     def _display_time_text(self, time_text: Any, raw_user: str) -> str | None:
-        """Hora para respuesta al usuario (evita 1:00→13:00 si hay «de la mañana»)."""
+        """Hora para respuesta al usuario (v0.44.2 — sin +12 solo por «a las N»).
+
+        Solo se ajusta a tarde si el mensaje indica explícitamente tarde/noche;
+        «de la mañana» conserva 01–11 como reloj civil.
+        La coerción ante modelos que devuelven H+12 está en
+        `_coerce_ambiguous_calendar_time_text` al persistir.
+        """
         if time_text is None:
             return None
         s = str(time_text).strip()
@@ -1033,16 +1139,17 @@ class AssistantEngine:
             if any(
                 x in ru
                 for x in (
-                    " tarde",
+                    " esta tarde",
+                    "esta tarde",
+                    "por la tarde",
+                    " de la tarde",
                     "de la tarde",
-                    " noche",
+                    " esta noche",
+                    "esta noche",
                     " de la noche",
+                    "de la noche",
                     "medianoche",
                 )
-            ):
-                return f"{h + 12}:{mi}"
-            if re.search(rf"a las?\s*{h}\b", ru) or re.search(
-                rf"a las?\s*{h}:{re.escape(mi)}", ru
             ):
                 return f"{h + 12}:{mi}"
         return s
@@ -1362,10 +1469,12 @@ class AssistantEngine:
 
     def _payload_from_agenda_ed(self, raw: str, m: dict[str, Any]) -> dict[str, Any]:
         ed = m.get("event_data") or {}
+        tt_raw = ed.get("time_text")
+        tt_eff = _calendar_time_text_after_user_message(raw, tt_raw)
         payload: dict[str, Any] = {
             "title": str(ed.get("title") or "").strip() or "Evento",
             "date_text": ed.get("date_text"),
-            "time_text": ed.get("time_text"),
+            "time_text": tt_eff if tt_eff is not None else tt_raw,
             "location": ed.get("location"),
             "description": ed.get("description"),
             "participants": list(ed.get("participants") or []),
@@ -1379,13 +1488,15 @@ class AssistantEngine:
     def _agenda_pending_payload(self, raw: str, m: dict[str, Any]) -> dict[str, Any]:
         ed = m.get("event_data") or {}
         title = str(ed.get("title") or "").strip()
+        tt_raw_ag = ed.get("time_text")
+        tt_eff_ag = _calendar_time_text_after_user_message(raw, tt_raw_ag)
         return {
             "original_text": raw,
             "suggested_intent": "calendario",
             "clean_content": title or raw,
             "title": ed.get("title"),
             "date_text": ed.get("date_text"),
-            "time_text": ed.get("time_text"),
+            "time_text": tt_eff_ag if tt_eff_ag is not None else tt_raw_ag,
             "location": ed.get("location"),
             "description": ed.get("description"),
             "participants": list(ed.get("participants") or []),
@@ -1826,6 +1937,7 @@ class AssistantEngine:
         """
         title_raw = (ev.get("title") or "").strip()
         title_eff = title_raw or None
+        tt_eff = _calendar_time_text_after_user_message(raw, ev.get("time_text"))
         payload: dict[str, Any] = {
             "original_text": raw,
             "suggested_intent": "calendario",
@@ -1833,7 +1945,7 @@ class AssistantEngine:
             "clean_content": title_raw or raw,
             "title": title_eff,
             "date_text": ev.get("date_text"),
-            "time_text": ev.get("time_text"),
+            "time_text": tt_eff if tt_eff is not None else ev.get("time_text"),
             "location": ev.get("location"),
             "description": ev.get("description"),
             "participants": list(ev.get("participants") or []),
@@ -2551,10 +2663,11 @@ class AssistantEngine:
         self, raw: str, ev: dict[str, Any], confidence: float
     ) -> dict[str, Any]:
         title = str(ev.get("title") or "").strip() or "Evento"
+        tt_eff = _calendar_time_text_after_user_message(raw, ev.get("time_text"))
         payload: dict[str, Any] = {
             "title": title,
             "date_text": ev.get("date_text"),
-            "time_text": ev.get("time_text"),
+            "time_text": tt_eff if tt_eff is not None else ev.get("time_text"),
             "location": ev.get("location"),
             "description": ev.get("description"),
             "participants": list(ev.get("participants") or []),
@@ -2756,7 +2869,12 @@ class AssistantEngine:
         ev = unified.get("calendar_event") or {}
         title = (ev.get("title") or "").strip() if ev.get("title") else ""
         date_text = (ev.get("date_text") or "").strip() if ev.get("date_text") else ""
-        time_text = (ev.get("time_text") or "").strip() if ev.get("time_text") else ""
+        _tt_src = ev.get("time_text")
+        time_text = ""
+        if _tt_src is not None and str(_tt_src).strip():
+            time_text = (
+                _calendar_time_text_after_user_message(raw, _tt_src) or str(_tt_src)
+            ).strip()
         location = (ev.get("location") or "").strip() if ev.get("location") else ""
         participants = list(ev.get("participants") or [])
         conf = float(unified.get("confidence", 0))
@@ -3992,10 +4110,12 @@ class AssistantEngine:
 
     def _store_payload_from_cal(self, raw: str, cal: dict[str, Any]) -> dict[str, Any]:
         title = str(cal.get("title") or "").strip() or "Evento"
+        tt_src = cal.get("time_text")
+        tt_eff = _calendar_time_text_after_user_message(raw, tt_src)
         payload: dict[str, Any] = {
             "title": title,
             "date_text": cal.get("date_text"),
-            "time_text": cal.get("time_text"),
+            "time_text": tt_eff if tt_eff is not None else tt_src,
             "location": cal.get("location"),
             "description": cal.get("description"),
             "participants": list(cal.get("participants") or []),
@@ -4009,13 +4129,15 @@ class AssistantEngine:
 
     def _pending_calendar_payload(self, raw: str, cal: dict[str, Any]) -> dict[str, Any]:
         title = str(cal.get("title") or "").strip()
+        tt_src = cal.get("time_text")
+        tt_eff = _calendar_time_text_after_user_message(raw, tt_src)
         return {
             "original_text": raw,
             "suggested_intent": "calendario",
             "clean_content": title or raw,
             "title": cal.get("title"),
             "date_text": cal.get("date_text"),
-            "time_text": cal.get("time_text"),
+            "time_text": tt_eff if tt_eff is not None else tt_src,
             "location": cal.get("location"),
             "description": cal.get("description"),
             "participants": list(cal.get("participants") or []),
@@ -4567,6 +4689,11 @@ class AssistantEngine:
 
         # intent == "complete_pending_event": fusionar y decidir.
         merged = self._apply_completion_updates(pending, updates, raw)
+        tt_m = (merged.get("time_text") or "").strip()
+        if tt_m:
+            ot = str(pending.get("original_text") or "")
+            merged["time_text"] = _coerce_calendar_time_twice_sources(raw, ot, tt_m)
+
         if self._calendar_ready_to_save(merged):
             return self._save_pending_calendar_now(merged, raw)
 
@@ -4617,10 +4744,17 @@ class AssistantEngine:
             or str(pending.get("original_text") or "").strip()
             or "Evento"
         )
+        raw_src = str(pending.get("original_text") or "")
+        tt_p = pending.get("time_text")
+        tt_eff = None
+        if tt_p is not None and str(tt_p).strip():
+            tt_eff = _coerce_ambiguous_calendar_time_text(
+                raw_src, str(tt_p).strip()
+            )
         payload: dict[str, Any] = {
             "title": title,
             "date_text": pending.get("date_text"),
-            "time_text": pending.get("time_text"),
+            "time_text": tt_eff if tt_eff is not None else tt_p,
             "location": pending.get("location"),
             "description": pending.get("description"),
             "participants": list(pending.get("participants") or [])

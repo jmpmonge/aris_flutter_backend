@@ -31,17 +31,22 @@ class HistoryStore:
             json.dump(items, fp, ensure_ascii=False, indent=2)
 
     def save_interaction(
-        self, user_text: str, assistant_text: str, intent_type: str
+        self,
+        user_text: str,
+        assistant_text: str,
+        intent_type: str,
+        ui_hint: str | None = None,
     ) -> None:
         items = self._load()
-        items.append(
-            {
-                "user_text": user_text,
-                "assistant_text": assistant_text,
-                "intent_type": intent_type,
-                "created_at": _utc_iso(),
-            }
-        )
+        row: dict = {
+            "user_text": user_text,
+            "assistant_text": assistant_text,
+            "intent_type": intent_type,
+            "created_at": _utc_iso(),
+        }
+        if ui_hint:
+            row["ui_hint"] = ui_hint
+        items.append(row)
         self._save(items)
 
     def get_history(self) -> list:
