@@ -10,5 +10,11 @@
     "assistant_text": "He entendido tu consulta. Más adelante la conectaré con el núcleo de IA.",
     "intent_type": "consulta",
     "created_at": "2026-05-15T15:56:28.391534+00:00"
+  },
+  {
+    "user_text": "hola",
+    "assistant_text": "He entendido tu consulta. Más adelante la conectaré con el núcleo de IA.",
+    "intent_type": "consulta",
+    "created_at": "2026-05-15T16:05:21.231609+00:00"
   }
 ]
