@@ -15,9 +15,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.core.assistant_engine import AssistantEngine
 from backend.models.assistant_message import (
     AssistantResponse,
+    EventPatchBody,
     NotePatchBody,
     TaskPatchBody,
     UserMessage,
+    build_event_updates_from_patch,
 )
 from backend.storage.events_store import EventsStore
 from backend.storage.focus_store import FocusStore
@@ -140,6 +142,27 @@ def tasks():
 @app.get("/events")
 def events():
     return events_store.get_events()
+
+
+@app.patch("/events/{event_id}")
+def patch_event(event_id: str, body: EventPatchBody):
+    """Actualiza parcialmente un evento (v0.43). Ver `EventPatchBody` y `build_event_updates_from_patch`."""
+    try:
+        updates = build_event_updates_from_patch(body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    updated = events_store.update_event(event_id, updates)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Evento no encontrado")
+    return updated
+
+
+@app.delete("/events/{event_id}")
+def delete_event_route(event_id: str):
+    """Elimina el evento por id; misma forma de respuesta que notas/tareas (v0.43)."""
+    if not events_store.delete_event(event_id):
+        raise HTTPException(status_code=404, detail="Evento no encontrado")
+    return {"status": "deleted", "id": event_id}
 
 
 @app.patch("/tasks/{task_id}")

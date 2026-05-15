@@ -551,6 +551,20 @@ class EventsStore:
             return ev
         return None
 
+    def delete_event(self, event_id: str) -> bool:
+        """Elimina un evento por id. Analogía con NotesStore y TasksStore."""
+        sid = str(event_id).strip()
+        if not sid:
+            return False
+        items = self._load()
+        kept = [e for e in items if str(e.get("id", "")) != sid]
+        if len(kept) == len(items):
+            return False
+        self._save(kept)
+        if self.get_focused_event_id() == sid:
+            self.set_focused_event_id(None)
+        return True
+
     @staticmethod
     def format_event_summary(event: dict[str, Any]) -> str:
         """Frase compacta tipo «cita mañana a las 14:30 en hospital»."""
