@@ -1,13 +1,13 @@
 {
   "user_id": "local_default_user",
   "last_operation": "update_calendar_event",
-  "last_topic": "quiero poner una cita mañana a las 7 con Luis",
-  "last_answer_summary": "He actualizado el evento: cita con Luis mañana a las 7.",
+  "last_topic": "CITA CON LUIS MAÑANA A LAS 4",
+  "last_answer_summary": "He actualizado el evento: cita con Luis mañana a las 4.",
   "candidate_event_ids": [
     "78e22a9f-d4cd-4e29-8e03-4641e5afab4d"
   ],
   "focused_event_id": "78e22a9f-d4cd-4e29-8e03-4641e5afab4d",
   "duplicates_pending": false,
   "conflicts_pending": false,
-  "saved_at": "2026-05-15T17:54:45.584522+00:00"
+  "saved_at": "2026-05-15T18:09:15.403663+00:00"
 }

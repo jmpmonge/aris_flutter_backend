@@ -130,5 +130,29 @@
     "assistant_text": "He actualizado el evento: cita con Luis mañana a las 7.",
     "intent_type": "consulta",
     "created_at": "2026-05-15T17:54:45.585302+00:00"
+  },
+  {
+    "user_text": "CITA CON LUIS MAÑANA A LAS 4",
+    "assistant_text": "He actualizado el evento: cita con Luis mañana a las 4.",
+    "intent_type": "consulta",
+    "created_at": "2026-05-15T18:09:15.403995+00:00"
+  },
+  {
+    "user_text": "CITA CON JAN EL DOMINGO A LAS 8",
+    "assistant_text": "He guardado el evento «Cita con Jan» para domingo a las 8. No tengo guardado con quién es. No tengo guardado el lugar.",
+    "intent_type": "calendario",
+    "created_at": "2026-05-15T18:10:10.210565+00:00"
+  },
+  {
+    "user_text": "quiero poner una cita mañana a las 20:00 con Luis",
+    "assistant_text": "He guardado el evento «cita con Luis» para mañana a las 20:00. No tengo guardado el lugar.",
+    "intent_type": "calendario",
+    "created_at": "2026-05-15T18:41:58.835980+00:00"
+  },
+  {
+    "user_text": "quiero poner una cita mañana a las 8 con Luis",
+    "assistant_text": "¿Para qué día, a qué hora y con quién o dónde es la cita?",
+    "intent_type": "ambiguo",
+    "created_at": "2026-05-15T18:42:26.101829+00:00"
   }
 ]

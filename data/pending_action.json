@@ -1,0 +1,21 @@
+{
+  "original_text": "quiero poner una cita mañana a las 8 con Luis",
+  "suggested_intent": "calendario",
+  "pending_kind": "calendar_event_completion",
+  "clean_content": "cita",
+  "title": "cita",
+  "date_text": null,
+  "time_text": null,
+  "location": null,
+  "description": null,
+  "participants": [],
+  "duration_minutes": null,
+  "confidence": null,
+  "missing_fields": [
+    "date_text",
+    "time_text",
+    "participants_or_location"
+  ],
+  "created_at": "2026-05-15T18:42:26.100094+00:00",
+  "calendar_structured": true
+}

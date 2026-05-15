@@ -34,6 +34,9 @@ from backend.storage.tasks_store import TasksStore
 
 logger = logging.getLogger(__name__)
 
+# v0.46a — Cadena de aclaraciones GPT-orquestada (pending_kind gpt_needs_clarification).
+_MAX_GPT_CLARIFICATION_STEPS = 3
+
 
 def _utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -1852,6 +1855,23 @@ class AssistantEngine:
 
         pending = self._pending.get_pending_action()
         if pending:
+            if (
+                isinstance(pending, dict)
+                and pending.get("pending_kind") == "gpt_needs_clarification"
+            ):
+                key_ok = bool((os.getenv("OPENAI_API_KEY") or "").strip())
+                if key_ok:
+                    unified_nc = try_structured_user_intent(
+                        raw,
+                        self._unified_candidates(raw),
+                        self._events.get_focused_event(),
+                        pending_context=pending,
+                    )
+                    if unified_nc is not None:
+                        logger.info(
+                            "v0.46a: continuación desde gpt_needs_clarification → motor unificado"
+                        )
+                        return self._dispatch_unified_motor(raw, unified_nc)
             return self._process_pending_reply(raw, pending)
 
         return self._process_fresh(raw)
@@ -2939,16 +2959,12 @@ class AssistantEngine:
             parts.append(f"a las {tt_disp}")
         reply = " ".join(parts) + "."
 
-        store_payload: str | dict[str, Any]
-        if date_text or time_text or priority:
-            store_payload = {
-                "title": title,
-                "date_text": date_text or None,
-                "time_text": time_text or None,
-                "priority": priority or None,
-            }
-        else:
-            store_payload = title
+        store_payload: dict[str, Any] = {
+            "title": title,
+            "date_text": date_text or None,
+            "time_text": time_text or None,
+            "priority": priority or None,
+        }
         return (reply, "tarea", store_payload, None)
 
     def _unified_handle_calendar_create(
@@ -3733,9 +3749,36 @@ class AssistantEngine:
         )
         return (ack, "consulta", None, None)
 
+    @staticmethod
+    def _suggested_intent_from_unified(unified: dict[str, Any]) -> str:
+        op = str(unified.get("operation") or "")
+        if op in ("create_calendar_event", "update_calendar_event", "query_calendar"):
+            return "calendario"
+        if op == "create_task":
+            return "tarea"
+        if op == "create_note":
+            return "nota"
+        return "ambiguo"
+
     def _unified_handle_clarification(
         self, raw: str, unified: dict[str, Any]
     ) -> tuple[str, str, str | dict | None, str | None]:
+        prev = self._pending.get_pending_action() or {}
+        if (
+            isinstance(prev, dict)
+            and prev.get("pending_kind") == "gpt_needs_clarification"
+        ):
+            prev_step = int(prev.get("clarification_step") or 0)
+            if prev_step >= _MAX_GPT_CLARIFICATION_STEPS:
+                logger.info("v0.46a: clarification_step máximo alcanzado")
+                return (
+                    "Hemos hecho ya varias aclaraciones sin cerrar la acción. "
+                    "¿Puedes plantearla de nuevo en una sola frase con día, "
+                    "hora y qué necesitas?",
+                    "consulta",
+                    None,
+                    None,
+                )
         # v0.21.4b/c — Si el mensaje tiene clara intención de calendario, no
         # perdemos el hilo: guardamos una pending mínima y usamos SIEMPRE la
         # pregunta comprensiva (no la de GPT, que suele ser parcial).
@@ -3762,11 +3805,54 @@ class AssistantEngine:
             unified.get("clarification_question")
             or "¿Puedes concretar un poco más?"
         )
-        return (msg, "consulta", None, None)
+
+        pend_prev = self._pending.get_pending_action() or {}
+        next_step = 1
+        if pend_prev.get("pending_kind") == "gpt_needs_clarification":
+            next_step = int(pend_prev.get("clarification_step") or 0) + 1
+        if next_step > _MAX_GPT_CLARIFICATION_STEPS:
+            return (
+                "Llevamos ya varios pasos de aclaración. ¿Puedes resumir en "
+                "una frase lo que quieres guardar o cambiar?",
+                "consulta",
+                None,
+                None,
+            )
+
+        action_v046: dict[str, Any] = {
+            "pending_kind": "gpt_needs_clarification",
+            "user_id": DEFAULT_USER_ID,
+            "original_text_last": raw,
+            "gpt_operation": unified.get("operation"),
+            "suggested_intent": self._suggested_intent_from_unified(unified),
+            "question": msg,
+            "gpt_clarification_question": msg,
+            "missing_fields": list(unified.get("missing_fields") or []),
+            "ambiguities": list(unified.get("ambiguities") or []),
+            "requires_explicit_confirmation": bool(
+                unified.get("requires_explicit_confirmation")
+            ),
+            "reason_gpt": unified.get("reason"),
+            "clarification_step": next_step,
+            "max_clarification_steps": _MAX_GPT_CLARIFICATION_STEPS,
+            "structured_calendar_hint": unified.get("calendar_event"),
+            "structured_task_hint": unified.get("task"),
+            "structured_note_hint": unified.get("note"),
+            "confidence": unified.get("confidence"),
+        }
+        self._pending.save_pending_action(action_v046)
+        logger.info(
+            "v0.46a: pending gpt_needs_clarification step=%s (question guardada)",
+            next_step,
+        )
+        return (msg, "ambiguo", None, None)
 
     def _unified_handle_general(
         self, raw: str, unified: dict[str, Any]
     ) -> tuple[str, str, str | dict | None, str | None]:
+        ar = (unified.get("assistant_reply") or "").strip()
+        if ar:
+            return (ar, "consulta", None, None)
         # v0.21.4c — Salvavidas: si el motor unificado declara general_query pero
         # el mensaje es claramente "agéndame una cita" sin datos, no caemos a GPT
         # general; abrimos pending de calendario y preguntamos lo que falta.
@@ -3808,10 +3894,18 @@ class AssistantEngine:
         msg = self._calendar_pending_question_for_missing(action)
         return (msg, "ambiguo", None, None)
 
+    def _clear_gpt_needs_pending_if_any(self) -> None:
+        p = self._pending.get_pending_action()
+        if isinstance(p, dict) and p.get("pending_kind") == "gpt_needs_clarification":
+            self._pending.clear_pending_action()
+            logger.debug("v0.46a: pending gpt_needs_clarification limpiada antes de ejecutar acción")
+
     def _dispatch_unified_motor(
         self, raw: str, unified: dict[str, Any]
     ) -> tuple[str, str, str | dict | None, str | None]:
         op = unified["operation"]
+        if op != "needs_clarification":
+            self._clear_gpt_needs_pending_if_any()
         if op == "create_note":
             return self._unified_handle_note(raw, unified)
         if op == "create_task":
@@ -4166,18 +4260,24 @@ class AssistantEngine:
             logger.info("Motor agenda GPT: sin resultado; flujo estándar")
 
         if self._keywords_match(raw, self._KW_NOTA):
-            logger.info("Clasificación local: nota")
+            logger.info(
+                "v0.46a: legado sin motor unificado; keyword nota → consulta guiada sin persistencia"
+            )
             return (
-                "He guardado esta nota provisionalmente.",
-                "nota",
+                "No está activo el motor estructurado (OPENAI). "
+                "Configura OPENAI_API_KEY o reformula con «guarda una nota: …».",
+                "consulta",
                 None,
                 None,
             )
         if self._keywords_match(raw, self._KW_TAREA):
-            logger.info("Clasificación local: tarea")
+            logger.info(
+                "v0.46a: legado sin motor unificado; keyword tarea → consulta guiada sin persistencia"
+            )
             return (
-                "He creado esta tarea provisional.",
-                "tarea",
+                "No está activo el motor estructurado (OPENAI). "
+                "Configura OPENAI_API_KEY o reformula la tarea con un título claro.",
+                "consulta",
                 None,
                 None,
             )

@@ -15,6 +15,7 @@ def main() -> int:
         ROOT / "smoke_v0442_time_ambiguity.py",
         ROOT / "smoke_v045b_no_raw_calendar_fallback.py",
         ROOT / "smoke_v045c_create_not_update.py",
+        ROOT / "smoke_v046a_decision_engine_contract.py",
     ]
     for s in scripts:
         if not s.is_file():

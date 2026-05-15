@@ -59,13 +59,36 @@
     "title": "cita con Luis",
     "created_at": "2026-05-15T17:47:44.625075+00:00",
     "date_text": "mañana",
-    "time_text": "7",
+    "time_text": "4",
     "participants": [
       "Luis"
     ],
     "source_text": "quiero poner una cita mañana a las 7 con Luis",
     "confidence": 1.0,
     "needs_confirmation": false,
-    "updated_at": "2026-05-15T17:54:45.582580+00:00"
+    "updated_at": "2026-05-15T18:09:15.402811+00:00"
+  },
+  {
+    "id": "464a9b62-9a91-409a-b7cd-32079a22f107",
+    "title": "Cita con Jan",
+    "created_at": "2026-05-15T18:10:10.209164+00:00",
+    "date_text": "domingo",
+    "time_text": "8",
+    "source_text": "CITA CON JAN EL DOMINGO A LAS 8",
+    "confidence": 0.9,
+    "needs_confirmation": false
+  },
+  {
+    "id": "1cbc2705-ad25-4688-985e-5c834d09cdf7",
+    "title": "cita con Luis",
+    "created_at": "2026-05-15T18:41:58.835171+00:00",
+    "date_text": "mañana",
+    "time_text": "20:00",
+    "participants": [
+      "Luis"
+    ],
+    "source_text": "quiero poner una cita mañana a las 20:00 con Luis",
+    "confidence": 0.9,
+    "needs_confirmation": false
   }
 ]

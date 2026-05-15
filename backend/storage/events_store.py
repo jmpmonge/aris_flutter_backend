@@ -306,8 +306,12 @@ class EventsStore:
 
     def add_event(self, event_data: str | dict[str, Any]) -> dict[str, Any]:
         """
-        Crea un evento. Si event_data es str, comportamiento legado (solo título).
-        Si es dict, evento estructurado (v0.21+).
+        Crea un evento.
+
+        v0.46a: el flujo principal por ``POST /message`` debe usar **solo** ``dict``
+        estructurado. La rama ``str`` es **legado** (título simple) y queda por
+        compatibilidad con tests/código antiguo; no debe usarse como resultado
+        del motor GPT-orquestado.
         """
         if isinstance(event_data, str):
             items = self._load()

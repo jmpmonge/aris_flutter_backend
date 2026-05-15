@@ -163,6 +163,7 @@ Recibes en el mensaje de usuario un objeto JSON con:
 - "mensaje_usuario": texto a interpretar (puede ser voz transcrita).
 - "eventos_candidatos": lista de eventos locales que podrían ser referidos (resumen reducido).
 - "evento_enfocado": evento sobre el que el usuario hablaba en mensajes recientes; puede ser null.
+- "accion_pendiente_previa_v046a" (opcional): resumen de pending_action cuando el usuario continúa una aclaración; respétalo y avanza clarification_step sólo cuando corresponda.
 
 Debes devolver EXACTAMENTE este esquema:
 
@@ -191,20 +192,34 @@ Debes devolver EXACTAMENTE este esquema:
       "participants": [], "description": null, "duration_minutes": null
     }
   },
-  "missing_fields": []
+  "missing_fields": [],
+  "status": "ready | needs_clarification | needs_confirmation | general_answer | failed",
+  "ambiguities": [],
+  "assistant_reply": null
 }
 
-Reglas:
+El campo opcional pero recomendado "status" alinea ARIS con el contrato maestro v0.46a:
+- "ready": la operation indicada puede ejecutarse (si Aris ya tiene datos mínimos) o debe seguir reglas locales de pendientes.
+- "needs_clarification": DEBES usar operation="needs_clarification"; rellena clarification_question O assistant_reply con la pregunta.
+- "needs_confirmation": mismo operation="needs_clarification"; el usuario debe confirmar antes de borrar o cambios delicados (p. ej. borrado de eventos).
+- "general_answer": operation="general_query"; rellena assistant_reply si quieres una respuesta textual sin crear entidades.
+- "failed": operation="needs_clarification"; pide reformulación breve sin inventar datos.
+
+"ambiguities" (lista de objetos): si hora o dato es ambiguo, describe field, options y reason. Ej.: hora "8" sin mañana/tarde explícita en franja 08:00–22:00 → opciones 08:00 y 20:00.
+
+Reglas (v0.46a):
 - El texto puede venir de VOZ: sin puntuación, errores leves de transcripción; "coma" puede ser pausa dictada; "si" puede ser "sí".
-- NO INVENTES fecha, hora, lugar ni participantes que no estén en el mensaje o en el evento referido.
+- NO INVENTES fecha, hora, lugar, ids de eventos ni participantes que no estén en el mensaje o en candidatos/foco explícitos.
+- NO inventes un viernes/12:00 u otra fecha fija si el usuario no la dijo.
 - Si falta un dato, deja null (o lista vacía).
-- Si el usuario PIDE CREAR un evento (cita/reunión/visita/etc.), operation = "create_calendar_event"; rellena calendar_event con lo que SÍ está claro y deja en null lo que falte.
+- Si el usuario PIDE CREAR un evento (cita/reunión/visita/etc.), operation = "create_calendar_event"; rellena calendar_event con lo que SÍ está claro. NUNCA clasifiques creación explícita como update_calendar_event aunque haya evento_enfocado.
 - Si el usuario PREGUNTA por su agenda (qué tengo, a qué hora, dónde, con quién, cuándo, listar día…), operation = "query_calendar"; rellena calendar_query (requested_field, terms, date_text si aplica, target_reference si corresponde) y NO uses create_*.
-- Si el usuario COMPLETA o CORRIGE un evento existente ("será con el médico", "es en el hospital", "añade que es online"), operation = "update_calendar_event"; rellena calendar_update con target_event_id (si está en candidatos/foco) o target_reference y los campos a actualizar en updates.
-- Si el usuario pide guardar una NOTA (apunta, recuérdame esto sin compromiso de horario), operation = "create_note"; note.content con el contenido limpio.
-- Si el usuario pide crear una TAREA (algo que debe hacer, deber, pendiente), operation = "create_task"; task.title y, si aparecen, date_text/time_text/priority.
-- Si falta dato crítico para decidir entre opciones razonables, operation = "needs_clarification" con clarification_question breve.
-- Solo si NO es nota, tarea ni agenda/calendario, operation = "general_query".
+- Si el usuario COMPLETA o CORRIGE un evento existente y NO es creación explícita, operation = "update_calendar_event"; calendar_update.target_event_id solo si el id está en candidatos o es inequívoco; si hay varios candidatos igualmente plausibles, operation="needs_clarification" y lista los eventos en ambiguities o en clarification_question — NO ejecutes actualización hasta aclaración.
+- Si el usuario pide borrar un evento, NO devuelvas borrado directo como listo sin confirmación: status="needs_confirmation" y clarification_question explícita.
+- Si el usuario pide guardar una NOTA, operation = "create_note"; note con title/content limpios, no el mensaje entero sin estructurar si puedes extraer título/cuerpo.
+- Si el usuario pide crear una TAREA, operation = "create_task"; task.title y campos opcionales.
+- Hora ambigua tipo "a las 8" sin contexto mañana/tarde: status="needs_clarification", ambiguities con opciones 08:00 y 20:00 salvo que el mensaje indique explícitamente mañana/tarde/noche o formato 24h inequívoco.
+- Si hay "accion_pendiente_previa" en el mensaje (continuación de aclaración), integra esa información; respeta max_clarification_steps indicado allí.
 - Una pregunta sobre la agenda NUNCA debe interpretarse como creación de evento.
 - Devuelve SOLO JSON válido."""
 
@@ -1612,10 +1627,20 @@ def _opt_str_list_from(d: dict[str, Any], key: str) -> list[str]:
     return out
 
 
+def _ambiguities_from_payload(data: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = data.get("ambiguities")
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for item in raw:
+        if isinstance(item, dict):
+            out.append(dict(item))
+    return out
+
+
 def _normalize_unified_intent(data: dict[str, Any]) -> Optional[dict[str, Any]]:
-    op = str(data.get("operation", "")).strip().lower()
-    if op not in _UNIFIED_OPERATIONS:
-        return None
+    ambiguities = _ambiguities_from_payload(data)
+
     try:
         confidence = float(data.get("confidence", 0))
     except (TypeError, ValueError):
@@ -1623,6 +1648,30 @@ def _normalize_unified_intent(data: dict[str, Any]) -> Optional[dict[str, Any]]:
     confidence = max(0.0, min(1.0, confidence))
     needs_clar = bool(data.get("needs_clarification", False))
     cq = _opt_str_from(data, "clarification_question")
+    assistant_reply = _opt_str_from(data, "assistant_reply")
+
+    status_raw = str(data.get("status", "")).strip().lower()
+    op_raw = str(data.get("operation", "")).strip().lower()
+
+    if assistant_reply and not cq:
+        cq = assistant_reply
+
+    requires_confirmation = False
+    if status_raw == "needs_confirmation":
+        requires_confirmation = True
+
+    op = op_raw
+    if status_raw == "general_answer":
+        op = "general_query"
+    elif status_raw in ("needs_clarification", "needs_confirmation", "failed"):
+        op = "needs_clarification"
+        needs_clar = True
+        if status_raw == "failed" and not cq:
+            cq = "¿Puedes reformular tu mensaje con más detalle?"
+
+    if op not in _UNIFIED_OPERATIONS:
+        return None
+
     reason = str(data.get("reason", "")).strip() or "—"
 
     note_raw = data.get("note") if isinstance(data.get("note"), dict) else {}
@@ -1690,6 +1739,10 @@ def _normalize_unified_intent(data: dict[str, Any]) -> Optional[dict[str, Any]]:
         "confidence": confidence,
         "needs_clarification": needs_clar,
         "clarification_question": cq,
+        "assistant_reply": assistant_reply,
+        "gpt_status": status_raw or None,
+        "ambiguities": ambiguities,
+        "requires_explicit_confirmation": requires_confirmation,
         "reason": reason,
         "note": note,
         "task": task,
@@ -1700,14 +1753,51 @@ def _normalize_unified_intent(data: dict[str, Any]) -> Optional[dict[str, Any]]:
     }
 
 
+def _compact_pending_context_for_gpt(p: dict[str, Any]) -> dict[str, Any]:
+    """Quita ruido de la pending antes de meterla en el prompt (v0.46a)."""
+    keep = (
+        "pending_kind",
+        "question",
+        "gpt_clarification_question",
+        "original_text",
+        "original_text_last",
+        "suggested_intent",
+        "gpt_operation",
+        "clarification_step",
+        "max_clarification_steps",
+        "ambiguities",
+        "missing_fields",
+        "requires_explicit_confirmation",
+        "structured_calendar_hint",
+        "structured_task_hint",
+        "structured_note_hint",
+        "reason_gpt",
+    )
+    out: dict[str, Any] = {}
+    if not isinstance(p, dict):
+        return out
+    for k in keep:
+        if k in p and p[k] is not None:
+            out[k] = p[k]
+    out.setdefault("max_clarification_steps", 3)
+    return out
+
+
 def try_structured_user_intent(
     user_text: str,
     candidate_events: Optional[list[dict[str, Any]]] = None,
     focused_event: Optional[dict[str, Any]] = None,
+    *,
+    pending_context: Optional[dict[str, Any]] = None,
 ) -> Optional[dict[str, Any]]:
     """
-    Motor estructurado unificado: clasifica el mensaje en operación (nota/tarea/calendario/consulta)
-    y devuelve sus datos en un JSON cerrado. Sin API key o error → None (fallback en llamador).
+    Motor estructurado unificado (v0.46a): GPT clasifica intención y devuelve JSON
+    alineado con `docs/architecture/aris_decision_engine_contract_v0_46a.md`.
+
+    Sin API key o error → None (el llamador usa fallback acotado).
+
+    ``pending_context`` opcional: pending_action previa para continuar aclaraciones
+    (se envía como ``accion_pendiente_previa_v046a`` en el JSON de usuario).
     """
     key = (os.getenv("OPENAI_API_KEY") or "").strip()
     if not key:
@@ -1728,17 +1818,22 @@ def try_structured_user_intent(
         if isinstance(focused_event, dict)
         else None
     )
-    payload = {
+    payload: dict[str, Any] = {
         "mensaje_usuario": text,
         "eventos_candidatos": compact_c,
         "evento_enfocado": compact_f,
     }
+    if pending_context:
+        payload["accion_pendiente_previa_v046a"] = _compact_pending_context_for_gpt(
+            pending_context
+        )
     user_block = json.dumps(payload, ensure_ascii=False)
 
     logger.info(
-        "Motor unificado GPT: llamada (candidatos=%d, hay_foco=%s)",
+        "Motor unificado GPT: llamada (candidatos=%d, hay_foco=%s, pending_v046a=%s)",
         len(compact_c),
         compact_f is not None,
+        pending_context is not None,
     )
     try:
         from openai import OpenAI

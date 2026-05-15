@@ -73,8 +73,13 @@ def message(body: UserMessage):
                 )
             else:
                 saved_note = notes_store.add_note(body.text)
+        elif isinstance(payload, str):
+            # v0.46a — Contrato GPT-orquestado: no persistir nota desde texto plano único.
+            logger.warning(
+                "main.message: intent nota con payload str omitido (defensivo v0.46a)"
+            )
         else:
-            saved_note = notes_store.add_note(str(payload))
+            saved_note = None
         # v0.21.9 — Foco multi-entidad.
         if isinstance(saved_note, dict) and saved_note.get("id"):
             engine.note_entity_persisted(
@@ -84,10 +89,18 @@ def message(body: UserMessage):
                 operation="create_note",
             )
     elif intent_type == "tarea":
+        saved_task: dict | None = None
         if isinstance(payload, dict):
             saved_task = tasks_store.add_task(payload)
+        elif isinstance(payload, str):
+            logger.warning(
+                "main.message: intent tarea con payload str omitido (defensivo v0.46a)"
+            )
         else:
-            saved_task = tasks_store.add_task(str(payload))
+            logger.warning(
+                "main.message: intent tarea con payload no dict/str omitido (%s)",
+                type(payload).__name__,
+            )
         if isinstance(saved_task, dict) and saved_task.get("id"):
             engine.note_entity_persisted(
                 kind="task",
@@ -100,9 +113,9 @@ def message(body: UserMessage):
         if isinstance(payload, dict):
             saved = events_store.add_event(payload)
         elif isinstance(payload, str):
-            # v0.45b — No persistir texto bruto como evento (evita título = mensaje completo).
+            # v0.45b + contrato v0.46a: no persistir texto bruto como evento.
             logger.warning(
-                "main.message: intent calendario con payload str omitido (defensivo v0.45b)"
+                "main.message: intent calendario con payload str omitido (defensivo)"
             )
         else:
             logger.warning(
