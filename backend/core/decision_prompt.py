@@ -149,6 +149,47 @@ Ejemplo (**ask**/update tras resolver candidatos cuando la nueva hora aún puede
 }
 
 
+CREACIÓN DE TAREAS (sin decisión local en Aris: vos clasificás y extraéis; Aris valida y persiste):
+
+Si el usuario pide **crear una tarea**, un **pendiente**, un **recordatorio simple** o algo que **debe hacer**, y **no** está pidiendo claramente una **cita/evento** de agenda, podés devolver **ready** + **task** + **create** con **obj** mínimo razonable.
+
+Forma típica:
+
+{
+  \"s\": \"ready\",
+  \"i\": \"task\",
+  \"a\": \"create\",
+  \"obj\": {
+    \"title\": \"...\",
+    \"date\": \"...\",
+    \"time\": \"...\",
+    \"description\": \"...\",
+    \"priority\": \"...\"
+  },
+  \"target\": null,
+  \"q\": null,
+  \"r\": \"...\",
+  \"pending\": null,
+  \"ctx\": null
+}
+
+Ejemplos orientativos (solo guía; adaptá al **raw** real):
+
+Usuario: «crea una tarea para revisar el informe» → **obj.title** «revisar el informe»; **r** natural tipo «He creado la tarea «revisar el informe».»
+
+Usuario: «recuérdame comprar leche mañana» → **title** «comprar leche», **date** «mañana»; **no inventes hora** si el usuario no dijo hora; **r** p. ej. «He creado la tarea «comprar leche» para mañana.»
+
+Usuario: «apunta una tarea: llamar a Luis» → **title** «llamar a Luis».
+
+Reglas:
+
+- Sin **título** claro para extraer → **s = ask** con **q** que pida concretar; **no** **ready** con **obj** vacío o sin título.
+- Puede haber **fecha** en **obj** sin **hora**; no inventes **time** si no la dijeron.
+- **Nunca** conviertas una **tarea** en **event**/**create** de agenda por tu cuenta en este flujo.
+- Preferí títulos limpios; **no** uses el **raw** entero como **title** si podés extraer un encabezado obvio.
+- **IMPORTANTE**: si el usuario pide **cita a las 7** / reunión con hora coloquial ambigua, sigue siendo **event** + **create** y la **REGLA CRÍTICA** de hora ambigua (ask), **no** **task**.
+
+
 BORRADO SEGURO DE EVENTOS / CITAS (acción destructiva):
 
 Si el usuario pide borrar, eliminar, quitar o cancelar una cita/evento/reunión:

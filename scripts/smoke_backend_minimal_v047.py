@@ -494,6 +494,115 @@ def smoke_7_8_multiple_candidates_update() -> None:
     print("smoke 7-8 OK (varios candidatos update)")
 
 
+def smoke_9_task_create_basic() -> None:
+    """v0.47.18: creación básica de tareas (ready/task/create)."""
+    # Caso A: tarea con fecha textual
+    r_a: dict[str, Any] = {
+        "s": "ready",
+        "i": "task",
+        "a": "create",
+        "obj": {
+            "title": "comprar leche",
+            "date": "mañana",
+        },
+        "target": None,
+        "q": None,
+        "r": "He creado la tarea «comprar leche» para mañana.",
+        "pending": None,
+        "ctx": None,
+    }
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        engine = _make_engine(base)
+        with patch.object(engine_mod, "ask_gpt", return_value=r_a):
+            ta, _, _, _ = engine.process_message("recuérdame comprar leche mañana")
+        if "comprar leche" not in ta and r_a["r"] not in ta:
+            raise AssertionError(f"smoke9A respuesta: {ta!r}")
+        ts = engine._tasks.list_tasks()
+        if len(ts) != 1:
+            raise AssertionError(f"smoke9A: una tarea esperada, hay {len(ts)}")
+        tsk = ts[0]
+        if tsk.get("title") != "comprar leche":
+            raise AssertionError(f"smoke9A title: {tsk!r}")
+        if str(tsk.get("date_text")) != "mañana":
+            raise AssertionError(f"smoke9A date_text: {tsk!r}")
+        if tsk.get("completed") is not False:
+            raise AssertionError("smoke9A completed debe ser False")
+        if "raw_text" in tsk:
+            raise AssertionError("smoke9A no raw_text en tarea")
+        if engine._events.list_events() or engine._notes.list_notes():
+            raise AssertionError("smoke9A no evento ni nota")
+        if engine._thread_store.get_state().get("open"):
+            raise AssertionError("smoke9A hilo cerrado")
+
+    # Caso B: sin fecha
+    r_b: dict[str, Any] = {
+        "s": "ready",
+        "i": "task",
+        "a": "create",
+        "obj": {
+            "title": "llamar al dentista",
+        },
+        "target": None,
+        "q": None,
+        "r": "He creado la tarea «llamar al dentista».",
+        "pending": None,
+        "ctx": None,
+    }
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        engine = _make_engine(base)
+        with patch.object(engine_mod, "ask_gpt", return_value=r_b):
+            tb, _, _, _ = engine.process_message(
+                "crea una tarea para llamar al dentista"
+            )
+        if len(engine._tasks.list_tasks()) != 1:
+            raise AssertionError("smoke9B: una tarea")
+        tsk_b = engine._tasks.list_tasks()[0]
+        if tsk_b.get("title") != "llamar al dentista":
+            raise AssertionError(f"smoke9B title: {tsk_b!r}")
+        if tsk_b.get("date_text") is not None:
+            raise AssertionError("smoke9B date_text debe ser None")
+        if tsk_b.get("time_text") is not None:
+            raise AssertionError("smoke9B time_text debe ser None")
+        if tsk_b.get("completed") is not False:
+            raise AssertionError("smoke9B completed")
+        if "¿Te refieres a las" in tb or "7:00" in tb:
+            raise AssertionError("smoke9B no debe preguntar hora ambigua de evento")
+        if engine._events.list_events():
+            raise AssertionError("smoke9B sin eventos")
+        if engine._thread_store.get_state().get("open"):
+            raise AssertionError("smoke9B hilo cerrado")
+
+    # Caso C: sin título en obj
+    r_c: dict[str, Any] = {
+        "s": "ready",
+        "i": "task",
+        "a": "create",
+        "obj": {},
+        "target": None,
+        "q": None,
+        "r": None,
+        "pending": None,
+        "ctx": None,
+    }
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        engine = _make_engine(base)
+        with patch.object(engine_mod, "ask_gpt", return_value=r_c):
+            tc, _, _, _ = engine.process_message("crea una tarea")
+        if engine._tasks.list_tasks():
+            raise AssertionError("smoke9C no debe crear tarea")
+        low = (tc or "").lower()
+        if "título" not in low and "no he podido guardar" not in low:
+            raise AssertionError(f"smoke9C mensaje error esperado: {tc!r}")
+        if engine._events.list_events() or engine._notes.list_notes():
+            raise AssertionError("smoke9C sin evento ni nota")
+        if engine._thread_store.get_state().get("open"):
+            raise AssertionError("smoke9C hilo cerrado")
+
+    print("smoke 9 OK (task create básico)")
+
 
 def main() -> int:
     try:
@@ -502,6 +611,7 @@ def main() -> int:
         smoke_5_query()
         smoke_6_delete_confirmation()
         smoke_7_8_multiple_candidates_update()
+        smoke_9_task_create_basic()
     except AssertionError as e:
         print(f"FAIL: {e}", file=sys.stderr)
         return 1
