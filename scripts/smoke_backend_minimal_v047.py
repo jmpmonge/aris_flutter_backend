@@ -286,11 +286,93 @@ def smoke_5_query() -> None:
     print("smoke 5 OK (consulta eventos need_context + answer)")
 
 
+def smoke_6_delete_confirmation() -> None:
+    """v0.47.15: ask delete_confirmation → tras sí, ready/delete borra."""
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        engine = _make_engine(base)
+        row = engine._events.add_event(
+            {
+                "title": "cita con Luis",
+                "date_text": "mañana",
+                "time_text": "20:00",
+                "participants": ["Luis"],
+            }
+        )
+        eid = str(row["id"])
+        q_txt = (
+            "¿Confirmas que quieres borrar la cita con Luis de mañana a las 20:00?"
+        )
+        r_confirm: dict[str, Any] = {
+            "s": "ask",
+            "i": "event",
+            "a": "delete",
+            "obj": {},
+            "target": eid,
+            "q": q_txt,
+            "r": None,
+            "pending": {
+                "field": "delete_confirmation",
+                "options": ["sí", "no"],
+                "target": eid,
+            },
+            "ctx": None,
+        }
+        r_del: dict[str, Any] = {
+            "s": "ready",
+            "i": "event",
+            "a": "delete",
+            "obj": {},
+            "target": eid,
+            "q": None,
+            "r": "He borrado la cita con Luis.",
+            "pending": None,
+            "ctx": None,
+        }
+        seq = iter([r_confirm, r_del])
+
+        def fake_ask(_p: dict[str, Any]) -> dict[str, Any] | None:
+            return next(seq)
+
+        with patch.object(engine_mod, "ask_gpt", side_effect=fake_ask):
+            t1, _, _, _ = engine.process_message("borra la cita con Luis")
+        _assert_no_uuid_in_visible(t1, "smoke6_ask")
+        if t1.strip() != q_txt:
+            raise AssertionError(f"smoke6 texto confirmación: {t1!r}")
+        if len(engine._events.list_events()) != 1:
+            raise AssertionError("smoke6: no debía borrarse antes de confirmar")
+        st = engine._thread_store.get_state()
+        if not st.get("open"):
+            raise AssertionError("smoke6: hilo debía quedar abierto")
+        pend = st.get("pending") or {}
+        if pend.get("field") != "delete_confirmation":
+            raise AssertionError(f"smoke6 pending.field: {pend!r}")
+        if pend.get("options") != ["sí", "no"]:
+            raise AssertionError(f"smoke6 pending.options: {pend!r}")
+        tid_top = str(st.get("target") or "").strip()
+        tid_pend = str(pend.get("target") or "").strip()
+        if tid_top != eid and tid_pend != eid:
+            raise AssertionError("smoke6: target debe almacenarse para continuar")
+
+        with patch.object(engine_mod, "ask_gpt", return_value=r_del):
+            t2, _, _, _ = engine.process_message("sí")
+        _assert_no_uuid_in_visible(t2, "smoke6_ready")
+        if "He borrado la cita con Luis." not in t2:
+            raise AssertionError(f"smoke6 respuesta tras borrar: {t2!r}")
+        if engine._events.list_events():
+            raise AssertionError("smoke6: el evento debía borrarse")
+        if engine._thread_store.get_state().get("open"):
+            raise AssertionError("smoke6: hilo debe cerrarse")
+
+    print("smoke 6 OK (confirmación borrado evento)")
+
+
 def main() -> int:
     try:
         smoke_1_2_ambiguous_then_continue()
         smoke_3_4()
         smoke_5_query()
+        smoke_6_delete_confirmation()
     except AssertionError as e:
         print(f"FAIL: {e}", file=sys.stderr)
         return 1

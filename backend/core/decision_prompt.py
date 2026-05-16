@@ -149,6 +149,29 @@ Ejemplo (**ask**/update tras resolver candidatos cuando la nueva hora aún puede
 }
 
 
+BORRADO SEGURO DE EVENTOS / CITAS (acción destructiva):
+
+Si el usuario pide borrar, eliminar, quitar o cancelar una cita/evento/reunión:
+
+- Si no está claro qué evento es en la agenda local: **need_context**, **i = event**, **a = delete**, **ctx** estructurado (p. ej. calendar + **events_by_person** si nombró a alguien, u otro query ya descrito como en consultas, con **filters** coherentes — **people**, **date** si el usuario dio día).
+- Con **varios candidatos**, **preguntá** cuál quiere borrar (**s = ask**, **q** natural, sin IDs).
+- Si hay **un candidato técnico claro** pero todavía **no** hay **confirmación explícita del borrado**: **s = ask**, **a = delete**, **target** sólo campo técnico; **pending** debe incluir:
+  **field**: **delete_confirmation**
+  **options**: **[\"sí\", \"no\"]**
+  **target**: id del evento (UUID en JSON; **jamás en q ni r**)
+- Ejemplo natural de **q**: «¿Confirmas que quieres borrar la cita con Luis de mañana a las 20:00?»
+
+Regla fuerte:
+**GPT no debe devolver ready/delete** salvo que el usuario haya confirmado claramente en una **continuación** después de ese **pending** de confirmación (**field = delete_confirmation**).
+
+
+Si **mode = continue** y **thread.pending.field** es **delete_confirmation**:
+
+- Si **raw** confirma (tú GPT interpretás; ejemplos orientativos sólo como guía textual: sí, si, confirmo, adelante, bórrala, borra): podés devolver **s = ready**, **i = event**, **a = delete**, **target** ese id técnico, **r** natural (ej. «He borrado la cita con Luis.» cuando encaje **thread.object**/contexto del hilo).
+- Si **raw** cancela (ejemplos orientativos: no, cancela, déjalo, no la borres): devolvé **s = answer**, **pending = null**, **r** tipo «De acuerdo, no borro la cita.»
+- Aris **no** decide esas equivalencias locales; vos interpretás.
+
+
 Reglas de hora ambigua:
 
 Si el usuario dice «a las 7»:
@@ -191,6 +214,8 @@ Ejemplo **need_context** (consulta día): **s** **need_context**, **i** **event*
 
 Ejemplo **need_context** (consulta persona): **ctx** calendar / **events_by_person** / **people** \["Luis"\].
 
+Ejemplo **need_context** (borrar sin datos locales cargados): **s** **need_context**, **i** **event**, **a** **delete**, **obj** usualmente `{}`, **ctx** estructurado —p. ej. **events_by_person** con **people** si nombró a alguien— como en las consultas; **jamás ejecutes borrado** desde este objeto JSON inicial.
+
 
 REGLAS CRÍTICAS — mode = context_response (segunda llamada interna después de tu **need_context**):
 
@@ -205,7 +230,13 @@ REGLAS CRÍTICAS — mode = context_response (segunda llamada interna después d
   - Si hay **varios**: **r** con lista sintética (sin ids).
   - **q**, **pending** y **ctx** en **null** en este camino cuando respondés.
 
-- Si **thread.action** **no** es **query** (p. ej. modificación donde **a** anterior era **update** u otras piezas ya descritas en **Actualización**):
+- Si **thread.action** es **delete**:
+  - **Jamás respondas ready/delete en este turno** (solo confirmación previa desde Aris después de más turnos usuario).
+  - Con **count = 0**: **answer** o **fail** natural; **no inventes** agenda.
+  - Con **count = 1**: **ask**, **i = event**, **a = delete**, **target** técnico UUID del candidato, **q** de confirmación (**sin IDs** en texto visible), **pending** típico: **field** **delete_confirmation**, **options** **[\"sí\", \"no\"]**, **target** técnico idéntico en **pending.target**.
+  - Con **count > 1**: **ask** sin borrar hasta desambiguar (lista conversacional sin UUIDs).
+
+- Si **thread.action** **no** es **query** ni **delete** (p. ej. modificación donde **a** anterior era **update** u otras piezas ya descritas en **Actualización**):
   - Usa **thread.ctx_requested** (domain/query/filters) junto con **context.candidatos** para elegir objeto o aclarar; los **ids** sólo pueden alimentar **target** técnico, **nunca** van en texto visible (**q**/ **r`).
   - Si **count = 0**: **answer** o **fail** razonables; **no inventes** agenda.
   - Si **count = 1** y encaja como objetivo único para el siguiente paso, podés usar **target** como **string** UUID del candidato (u objeto **`{\"id\":\"<uuid>\"}`** antes de compactar).

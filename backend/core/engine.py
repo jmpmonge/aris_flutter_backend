@@ -209,9 +209,58 @@ class ArisMinimalEngine:
             self._thread_store.clear_state()
             return (_MSG_UNSUPPORTED_MODIFY, "consulta", None, None)
 
-        # delete/complete/draft u otros — no ejecutar en v0.47.13 (query solo lectura arriba)
+        if a == "delete":
+            if i == "event":
+                return self._handle_ready_delete_event(result)
+            self._thread_store.clear_state()
+            return (_MSG_UNSUPPORTED, "consulta", None, None)
+
+        # complete/draft u otros — no ejecutar aquí (query tratado más arriba)
         self._thread_store.clear_state()
         return (_MSG_UNSUPPORTED, "consulta", None, None)
+
+    def _handle_ready_delete_event(
+        self, result: dict[str, Any]
+    ) -> tuple[str, str, dict[str, Any] | None, str | None]:
+        r_raw = result.get("r")
+
+        def _reply_del(default: str) -> str:
+            if isinstance(r_raw, str):
+                cleaned = sanitize_visible_text(r_raw)
+                if cleaned:
+                    return cleaned
+            return default
+
+        tid = extract_event_target_id(result)
+        if not tid:
+            self._thread_store.clear_state()
+            return (
+                "No sé qué evento quieres borrar. ¿Puedes concretarlo?",
+                "consulta",
+                None,
+                None,
+            )
+
+        if self._events.get_event_by_id(tid) is None:
+            self._thread_store.clear_state()
+            return (
+                "No encuentro ese evento en tu agenda local.",
+                "consulta",
+                None,
+                None,
+            )
+
+        if not self._events.delete_event(tid):
+            self._thread_store.clear_state()
+            return (
+                "No encuentro ese evento en tu agenda local.",
+                "consulta",
+                None,
+                None,
+            )
+
+        self._thread_store.clear_state()
+        return (_reply_del("He borrado el evento."), "calendario", None, None)
 
     def _handle_ready_update_event(
         self, result: dict[str, Any]

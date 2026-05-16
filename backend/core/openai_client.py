@@ -45,14 +45,26 @@ def ask_gpt(payload: dict[str, Any]) -> dict[str, Any] | None:
 
     try:
         client = OpenAI(api_key=key)
-        completion = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": MINIMAL_DECISION_SYSTEM_PROMPT},
-                {"role": "user", "content": user_content},
-            ],
-            temperature=0.1,
-        )
+
+        try:
+            completion = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": MINIMAL_DECISION_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_content},
+                ],
+                temperature=0.1,
+                response_format={"type": "json_object"},
+            )
+        except Exception:
+            completion = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": MINIMAL_DECISION_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_content},
+                ],
+                temperature=0.1,
+            )
         raw = completion.choices[0].message.content
         if raw is None:
             return None

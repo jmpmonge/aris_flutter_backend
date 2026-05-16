@@ -1,7 +1,7 @@
 """Estado de hilo conversacional — persistencia sin semántica.
 
 Contrato v0.47 (para empaquetar en GPT con mode=continue):
-open, intent, object, last_question, pending (y updated_at automático).
+open, intent, object, last_question, pending (y opcional target), updated_at automático.
 
 Aris solo persiste estos campos; no reinterpreta contenido aquí.
 """
@@ -25,6 +25,7 @@ DEFAULT_THREAD_STATE: dict[str, Any] = {
     "object": None,
     "last_question": None,
     "pending": None,
+    "target": None,
     "updated_at": None,
 }
 
@@ -62,3 +63,4 @@ class ThreadStateStore:
             data["object"] = None
             data["last_question"] = None
             data["pending"] = None
+            data["target"] = None

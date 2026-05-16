@@ -1,4 +1,4 @@
-"""API FastAPI mínima — Aris backend v0.47.8 (POST /message → engine)."""
+"""API FastAPI mínima — Aris backend v0.47.15 (POST /message → engine)."""
 
 from pathlib import Path
 from typing import Any
@@ -45,7 +45,7 @@ def health() -> dict[str, str]:
     return {
         "status": "ok",
         "backend": "minimal",
-        "version": "v0.47.8",
+        "version": "v0.47.15",
     }
 
 
