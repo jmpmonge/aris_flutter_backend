@@ -83,6 +83,35 @@ def build_payload(raw_text: str, thread_state: dict[str, Any] | None) -> dict[st
     return base
 
 
+def build_context_response_payload(
+    *,
+    peticion_original: str,
+    respuesta_gpt_previa: dict[str, Any],
+    contexto_encontrado: dict[str, Any],
+) -> dict[str, Any]:
+    """Segunda llamada a GPT: petición original + resultado previo + contexto técnico."""
+    raw_po = (peticion_original or "").strip()
+    return {
+        "raw": raw_po,
+        "tz": DEFAULT_TIMEZONE,
+        "locale": DEFAULT_LOCALE,
+        "mode": "context_response",
+        "thread": {
+            "intent": respuesta_gpt_previa.get("i"),
+            "action": respuesta_gpt_previa.get("a"),
+            "object": respuesta_gpt_previa.get("obj"),
+            "last_gpt_status": "need_context",
+            "ctx_requested": respuesta_gpt_previa.get("ctx"),
+            "original_raw": raw_po,
+        },
+        "context": contexto_encontrado,
+        "rules": {
+            "hide_internal": True,
+            "context_is_response_to_previous_need_context": True,
+        },
+    }
+
+
 def sanitize_visible_text(text: str | None) -> str:
     """Quita fugas técnicas típicas sin intentar interpretar el mensaje."""
     if text is None:

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from backend.core.context_resolver import resolver_contexto
 from backend.core.openai_client import ask_gpt
 from backend.core.payload_builder import (
+    build_context_response_payload,
     build_payload,
     normalize_gpt_response,
     sanitize_visible_text,
@@ -20,6 +22,9 @@ _MSG_NO_GPT = (
     "Ahora no puedo interpretar acciones complejas. Inténtalo de nuevo en un momento."
 )
 _MSG_UNSUPPORTED = "Todavía no puedo completar esa acción con seguridad."
+_MSG_UNSUPPORTED_MODIFY = (
+    "Todavía no puedo completar esa modificación con seguridad."
+)
 _MSG_NEED_MORE_CTX = (
     "Necesito un dato más para encontrarlo. ¿Puedes concretarlo?"
 )
@@ -29,6 +34,7 @@ _MSG_FAIL_FALLBACK = (
     "No estoy captando toda la información necesaria. ¿Podrías escribirlo de nuevo "
     "de forma más concreta?"
 )
+_MAX_CONTEXT_NEED_CONTEXT_DEPTH = 8
 
 
 class ArisMinimalEngine:
@@ -52,13 +58,89 @@ class ArisMinimalEngine:
             return (_MSG_EMPTY, "consulta", None, None)
 
         thread_state = self._thread_store.get_state()
-        payload = build_payload(raw_in, thread_state)
+        peticion_raiz = self._peticion_raiz_para_contexto(raw_in, thread_state)
 
+        payload = build_payload(raw_in, thread_state)
         gpt_raw = ask_gpt(payload)
         if gpt_raw is None:
             return (_MSG_NO_GPT, "consulta", None, None)
 
         result = normalize_gpt_response(gpt_raw)
+        if result["s"] == "need_context":
+            return self._flujo_need_context(peticion_raiz, result, depth=0)
+        return self._aplicar_resultado_gpt(result, peticion_raiz)
+
+    def _peticion_raiz_para_contexto(
+        self, raw_in: str, thread_state: dict[str, Any]
+    ) -> str:
+        if isinstance(thread_state, dict) and thread_state.get("open") is True:
+            pend = thread_state.get("pending")
+            if isinstance(pend, dict) and pend.get("field") == "context":
+                po = pend.get("peticion_original")
+                if isinstance(po, str) and po.strip():
+                    return po.strip()
+        return raw_in
+
+    def _flujo_need_context(
+        self,
+        peticion_original: str,
+        primera: dict[str, Any],
+        *,
+        depth: int = 0,
+    ) -> tuple[str, str, dict[str, Any] | None, str | None]:
+        if depth >= _MAX_CONTEXT_NEED_CONTEXT_DEPTH:
+            self._thread_store.clear_state()
+            return (_MSG_NEED_MORE_CTX, "ambiguo", None, None)
+
+        ctx_sol = primera.get("ctx") if isinstance(primera.get("ctx"), dict) else {}
+
+        contexto_encontrado = resolver_contexto(
+            ctx_sol,
+            events_store=self._events,
+            tasks_store=self._tasks,
+            notes_store=self._notes,
+        )
+
+        payload_ctx = build_context_response_payload(
+            peticion_original=(peticion_original or "").strip(),
+            respuesta_gpt_previa=primera,
+            contexto_encontrado=contexto_encontrado,
+        )
+
+        segunda_raw = ask_gpt(payload_ctx)
+        if segunda_raw is None:
+            self._thread_store.save_state(
+                {
+                    "open": True,
+                    "intent": primera["i"],
+                    "object": primera["obj"],
+                    "last_question": _MSG_NEED_MORE_CTX,
+                    "pending": {
+                        "field": "context",
+                        "ctx": primera["ctx"],
+                        "contexto_encontrado": contexto_encontrado,
+                        "peticion_original": (peticion_original or "").strip(),
+                    },
+                }
+            )
+            return (_MSG_NEED_MORE_CTX, "ambiguo", None, None)
+
+        segunda = normalize_gpt_response(segunda_raw)
+
+        if segunda["s"] == "need_context":
+            return self._flujo_need_context(
+                peticion_original,
+                segunda,
+                depth=depth + 1,
+            )
+
+        return self._aplicar_resultado_gpt(segunda, peticion_original)
+
+    def _aplicar_resultado_gpt(
+        self,
+        result: dict[str, Any],
+        peticion_raiz: str,
+    ) -> tuple[str, str, dict[str, Any] | None, str | None]:
         s = result["s"]
 
         if s == "ask":
@@ -88,16 +170,7 @@ class ArisMinimalEngine:
             return (reply or _MSG_FAIL_FALLBACK, "consulta", None, None)
 
         if s == "need_context":
-            self._thread_store.save_state(
-                {
-                    "open": True,
-                    "intent": result["i"],
-                    "object": result["obj"],
-                    "last_question": _MSG_NEED_MORE_CTX,
-                    "pending": {"field": "context", "ctx": result["ctx"]},
-                }
-            )
-            return (_MSG_NEED_MORE_CTX, "ambiguo", None, None)
+            return self._flujo_need_context(peticion_raiz, result, depth=0)
 
         if s == "ready":
             return self._handle_ready(result)
@@ -121,7 +194,11 @@ class ArisMinimalEngine:
         if a == "create":
             return self._handle_ready_create(result, i, obj)
 
-        # update/delete/query/complete/draft u otros — no ejecutar en v0.47.7
+        if a == "update":
+            self._thread_store.clear_state()
+            return (_MSG_UNSUPPORTED_MODIFY, "consulta", None, None)
+
+        # delete/query/complete/draft u otros — no ejecutar en v0.47.11
         self._thread_store.clear_state()
         return (_MSG_UNSUPPORTED, "consulta", None, None)
 
