@@ -74,6 +74,7 @@ def build_payload(raw_text: str, thread_state: dict[str, Any] | None) -> dict[st
         base["rules"] = {
             "hours": "08:00-22:00",
             "ambiguous_hour": "ask_closed_question",
+            "colloquial_hour_ambiguity": "never_ready_must_ask_with_options",
             "hide_internal": True,
         }
 
