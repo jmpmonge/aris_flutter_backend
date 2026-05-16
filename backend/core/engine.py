@@ -9,6 +9,7 @@ from backend.core.openai_client import ask_gpt
 from backend.core.payload_builder import (
     build_context_response_payload,
     build_payload,
+    extract_event_target_id,
     normalize_gpt_response,
     sanitize_visible_text,
 )
@@ -144,6 +145,7 @@ class ArisMinimalEngine:
         s = result["s"]
 
         if s == "ask":
+            tid = extract_event_target_id(result)
             self._thread_store.save_state(
                 {
                     "open": True,
@@ -151,6 +153,7 @@ class ArisMinimalEngine:
                     "object": result["obj"],
                     "last_question": result["q"],
                     "pending": result["pending"],
+                    "target": tid,
                 }
             )
             q = result["q"]
@@ -195,12 +198,76 @@ class ArisMinimalEngine:
             return self._handle_ready_create(result, i, obj)
 
         if a == "update":
+            if i == "event":
+                return self._handle_ready_update_event(result)
             self._thread_store.clear_state()
             return (_MSG_UNSUPPORTED_MODIFY, "consulta", None, None)
 
-        # delete/query/complete/draft u otros — no ejecutar en v0.47.11
+        # delete/query/complete/draft u otros — no ejecutar en v0.47.12
         self._thread_store.clear_state()
         return (_MSG_UNSUPPORTED, "consulta", None, None)
+
+    def _handle_ready_update_event(
+        self, result: dict[str, Any]
+    ) -> tuple[str, str, dict[str, Any] | None, str | None]:
+        r_raw = result.get("r")
+
+        def _reply_saved(default: str) -> str:
+            if isinstance(r_raw, str):
+                cleaned = sanitize_visible_text(r_raw)
+                if cleaned:
+                    return cleaned
+            return default
+
+        obj_raw = result.get("obj")
+        obj: dict[str, Any] = obj_raw if isinstance(obj_raw, dict) else {}
+
+        tid = extract_event_target_id(result)
+        if not tid:
+            self._thread_store.clear_state()
+            return (
+                "No sé qué evento quieres modificar. ¿Puedes concretarlo?",
+                "consulta",
+                None,
+                None,
+            )
+
+        if self._events.get_event_by_id(tid) is None:
+            self._thread_store.clear_state()
+            return (
+                "No encuentro ese evento en tu agenda local.",
+                "consulta",
+                None,
+                None,
+            )
+
+        updates = self._event_updates_from_obj(obj)
+        if not updates:
+            self._thread_store.clear_state()
+            return (
+                "No he captado qué dato quieres cambiar.",
+                "consulta",
+                None,
+                None,
+            )
+
+        try:
+            updated = self._events.update_event(tid, updates)
+        except ValueError:
+            self._thread_store.clear_state()
+            return ("No he podido modificar ese evento.", "consulta", None, None)
+
+        if updated is None:
+            self._thread_store.clear_state()
+            return ("No he podido modificar ese evento.", "consulta", None, None)
+
+        self._thread_store.clear_state()
+        return (
+            _reply_saved("He actualizado el evento."),
+            "calendario",
+            updated,
+            None,
+        )
 
     def _handle_ready_create(
         self,
@@ -267,6 +334,63 @@ class ArisMinimalEngine:
 
         self._thread_store.clear_state()
         return (_MSG_UNSUPPORTED, "consulta", None, None)
+
+    @staticmethod
+    def _event_updates_from_obj(obj: dict[str, Any]) -> dict[str, Any]:
+        """Campos admitidos por events_store.update_event; omitir vacíos."""
+        out: dict[str, Any] = {}
+
+        if "title" in obj:
+            tv = obj.get("title")
+            if tv is not None and str(tv).strip():
+                out["title"] = str(tv).strip()
+
+        dt_val = None
+        if "date_text" in obj:
+            dt_val = obj.get("date_text")
+        elif "date" in obj:
+            dt_val = obj.get("date")
+        if dt_val is not None and str(dt_val).strip():
+            out["date_text"] = str(dt_val).strip()
+
+        tm_val = None
+        if "time_text" in obj:
+            tm_val = obj.get("time_text")
+        elif "time" in obj:
+            tm_val = obj.get("time")
+        if tm_val is not None and str(tm_val).strip():
+            out["time_text"] = str(tm_val).strip()
+
+        if "people" in obj or "participants" in obj:
+            pr = obj.get("people")
+            if pr is None and "participants" in obj:
+                pr = obj.get("participants")
+            parts: list[str] = []
+            if isinstance(pr, str):
+                s = pr.strip()
+                if s:
+                    parts = [s]
+            elif isinstance(pr, list):
+                parts = [str(p).strip() for p in pr if str(p).strip()]
+            if parts:
+                out["participants"] = parts
+
+        if "location" in obj:
+            loc = obj.get("location")
+            if loc is not None and str(loc).strip():
+                out["location"] = str(loc).strip()
+
+        if "description" in obj:
+            desc = obj.get("description")
+            if desc is not None and str(desc).strip():
+                out["description"] = str(desc).strip()
+
+        if "duration_minutes" in obj:
+            dm = obj.get("duration_minutes")
+            if isinstance(dm, int):
+                out["duration_minutes"] = dm
+
+        return out
 
     @staticmethod
     def _event_payload(obj: dict[str, Any]) -> dict[str, Any] | None:

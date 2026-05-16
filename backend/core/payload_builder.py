@@ -64,6 +64,7 @@ def build_payload(raw_text: str, thread_state: dict[str, Any] | None) -> dict[st
             "object": thread_state.get("object"),
             "last_question": thread_state.get("last_question"),
             "pending": thread_state.get("pending"),
+            "target": thread_state.get("target"),
         }
         base["rules"] = {
             "ambiguous_hour": "do_not_reopen_if_option_matches",
@@ -112,6 +113,34 @@ def build_context_response_payload(
     }
 
 
+def normalize_target_id(val: Any) -> str | None:
+    """Extrae identificador de evento/objeto desde campo target (string u objeto {\"id\"})."""
+    if val is None:
+        return None
+    if isinstance(val, str):
+        s = val.strip()
+        return s or None
+    if isinstance(val, dict):
+        tid = val.get("id")
+        if tid is None:
+            tid = val.get("event_id")
+        if isinstance(tid, str):
+            xs = tid.strip()
+            return xs or None
+    return None
+
+
+def extract_event_target_id(result: dict[str, Any]) -> str | None:
+    """Igual que campo top-level target o pending.target tras normalizar."""
+    tid = normalize_target_id(result.get("target"))
+    if tid:
+        return tid
+    pend = result.get("pending")
+    if isinstance(pend, dict):
+        return normalize_target_id(pend.get("target"))
+    return None
+
+
 def sanitize_visible_text(text: str | None) -> str:
     """Quita fugas técnicas típicas sin intentar interpretar el mensaje."""
     if text is None:
@@ -148,10 +177,7 @@ def normalize_gpt_response(data: dict[str, Any] | None) -> dict[str, Any]:
     obj_raw = data.get("obj")
     obj_val: dict[str, Any] = obj_raw if isinstance(obj_raw, dict) else {}
 
-    target_raw = data.get("target")
-    target_val: dict[str, Any] | None = (
-        target_raw if isinstance(target_raw, dict) else None
-    )
+    target_val: str | None = normalize_target_id(data.get("target"))
 
     pending_raw = data.get("pending")
     pending_val: dict[str, Any] | None = (

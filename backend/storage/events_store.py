@@ -27,6 +27,15 @@ class EventsStore:
         rows = load_json_list(self._path)
         return [r for r in rows if isinstance(r, dict)]
 
+    def get_event_by_id(self, event_id: str) -> dict[str, Any] | None:
+        eid = str(event_id or "").strip()
+        if not eid:
+            return None
+        for ev in self.list_events():
+            if isinstance(ev, dict) and str(ev.get("id") or "").strip() == eid:
+                return dict(ev)
+        return None
+
     def add_event(self, data: dict[str, Any]) -> dict[str, Any]:
         title = str(data.get("title") or "").strip()
         if not title:
