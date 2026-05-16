@@ -190,6 +190,45 @@ Reglas:
 - **IMPORTANTE**: si el usuario pide **cita a las 7** / reunión con hora coloquial ambigua, sigue siendo **event** + **create** y la **REGLA CRÍTICA** de hora ambigua (ask), **no** **task**.
 
 
+CREACIÓN DE NOTAS (sin decisión local en Aris: vos clasificás; Aris guarda texto estructurado):
+
+Si el usuario pide **guardar una nota**, **apuntar una idea**, **registrar una observación**, **conservar un texto** o **anotar información** que **no** exige necesariamente **acción futura concreta** con el modelo **task**, podés usar **ready** + **note** + **create**.
+
+Forma típica:
+
+{
+  \"s\": \"ready\",
+  \"i\": \"note\",
+  \"a\": \"create\",
+  \"obj\": {
+    \"title\": \"...\",
+    \"content\": \"...\",
+    \"tags\": [\"...\"]
+  },
+  \"target\": null,
+  \"q\": null,
+  \"r\": \"...\",
+  \"pending\": null,
+  \"ctx\": null
+}
+
+Ejemplos orientativos:
+
+Usuario: «guarda una nota: idea para Aris, separar tareas y notas» → **title** «idea para Aris», **content** «separar tareas y notas».
+
+Usuario: «apunta esta idea: Aris debe responder corto por defecto» → **content** ese texto completo (**title** sólo si aportás un encabezado breve; puede omitirse).
+
+Usuario: «nota: revisar más adelante la diferencia entre tarea y recordatorio» → **content** esa frase (sin **tags** inventados).
+
+Reglas:
+
+- «Recordar hacer X» orientado a acción suele convenir **task**/**create** (véase **CREACIÓN DE TAREAS**); pensamiento o referencia pasiva suele convenir **note**/**create** — vos lo decis semánticamente.
+- Sin texto claro que guardar → **s = ask**; **no** **ready** con **obj** vacío.
+- **No** conviertas nota ↔ tarea ↔ evento automáticamente.
+- **tags** sólo si el usuario los dio o son inequívocos; **no** inventes etiquetas vacías ni listas forzadas.
+- **Preferí contenido limpio**; **no** metas **raw** entero como **content** cuando podás extraer el mensaje útil por separado.
+
+
 BORRADO SEGURO DE EVENTOS / CITAS (acción destructiva):
 
 Si el usuario pide borrar, eliminar, quitar o cancelar una cita/evento/reunión:

@@ -604,6 +604,114 @@ def smoke_9_task_create_basic() -> None:
     print("smoke 9 OK (task create básico)")
 
 
+def smoke_10_note_create_basic() -> None:
+    """v0.47.19: creación básica de notas (ready/note/create)."""
+    r_a: dict[str, Any] = {
+        "s": "ready",
+        "i": "note",
+        "a": "create",
+        "obj": {
+            "title": "idea para Aris",
+            "content": "separar tareas y notas",
+        },
+        "target": None,
+        "q": None,
+        "r": "He guardado la nota «idea para Aris».",
+        "pending": None,
+        "ctx": None,
+    }
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        engine = _make_engine(base)
+        with patch.object(engine_mod, "ask_gpt", return_value=r_a):
+            ta, _, _, _ = engine.process_message(
+                "guarda una nota: idea para Aris, separar tareas y notas"
+            )
+        if "idea para Aris" not in ta and r_a["r"] not in ta:
+            raise AssertionError(f"smoke10A respuesta: {ta!r}")
+        notes = engine._notes.list_notes()
+        if len(notes) != 1:
+            raise AssertionError(f"smoke10A una nota esperada: {notes!r}")
+        n_a = notes[0]
+        if n_a.get("title") != "idea para Aris":
+            raise AssertionError(f"smoke10A title: {n_a!r}")
+        if n_a.get("content") != "separar tareas y notas":
+            raise AssertionError(f"smoke10A content: {n_a!r}")
+        if "raw_text" in n_a:
+            raise AssertionError("smoke10A sin raw_text en nota")
+        if engine._events.list_events() or engine._tasks.list_tasks():
+            raise AssertionError("smoke10A sin eventos ni tareas")
+        if engine._thread_store.get_state().get("open"):
+            raise AssertionError("smoke10A hilo cerrado")
+
+    r_b: dict[str, Any] = {
+        "s": "ready",
+        "i": "note",
+        "a": "create",
+        "obj": {
+            "content": "Aris debe responder corto por defecto",
+        },
+        "target": None,
+        "q": None,
+        "r": "He guardado la nota.",
+        "pending": None,
+        "ctx": None,
+    }
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        engine = _make_engine(base)
+        with patch.object(engine_mod, "ask_gpt", return_value=r_b):
+            engine.process_message(
+                "apunta esta idea: Aris debe responder corto por defecto"
+            )
+        notes_b = engine._notes.list_notes()
+        if len(notes_b) != 1:
+            raise AssertionError("smoke10B una nota")
+        nb = notes_b[0]
+        if str(nb.get("content") or "").strip() != (
+            "Aris debe responder corto por defecto"
+        ):
+            raise AssertionError(f"smoke10B content: {nb!r}")
+        tit = nb.get("title")
+        if tit is not None and str(tit).strip() != "":
+            raise AssertionError(f"smoke10B title debería ser vacío/None: {tit!r}")
+        if engine._events.list_events() or engine._tasks.list_tasks():
+            raise AssertionError("smoke10B sin eventos ni tareas")
+        if engine._thread_store.get_state().get("open"):
+            raise AssertionError("smoke10B hilo cerrado")
+
+    r_c: dict[str, Any] = {
+        "s": "ready",
+        "i": "note",
+        "a": "create",
+        "obj": {},
+        "target": None,
+        "q": None,
+        "r": None,
+        "pending": None,
+        "ctx": None,
+    }
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        engine = _make_engine(base)
+        with patch.object(engine_mod, "ask_gpt", return_value=r_c):
+            tc, _, _, _ = engine.process_message("guarda una nota")
+        if engine._notes.list_notes():
+            raise AssertionError("smoke10C no crear nota")
+        low_c = (tc or "").lower()
+        if (
+            "contenido" not in low_c
+            and "no he podido guardar" not in low_c
+        ):
+            raise AssertionError(f"smoke10C error esperado: {tc!r}")
+        if engine._events.list_events() or engine._tasks.list_tasks():
+            raise AssertionError("smoke10C sin evento ni tarea")
+        if engine._thread_store.get_state().get("open"):
+            raise AssertionError("smoke10C hilo cerrado")
+
+    print("smoke 10 OK (note create básico)")
+
+
 def main() -> int:
     try:
         smoke_1_2_ambiguous_then_continue()
@@ -612,6 +720,7 @@ def main() -> int:
         smoke_6_delete_confirmation()
         smoke_7_8_multiple_candidates_update()
         smoke_9_task_create_basic()
+        smoke_10_note_create_basic()
     except AssertionError as e:
         print(f"FAIL: {e}", file=sys.stderr)
         return 1
