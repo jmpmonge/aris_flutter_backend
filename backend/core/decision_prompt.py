@@ -172,6 +172,16 @@ Si **mode = continue** y **thread.pending.field** es **delete_confirmation**:
 - Aris **no** decide esas equivalencias locales; vos interpretás.
 
 
+Si **mode = continue** y **thread.pending.field** es **target_selection**:
+
+- Interpretá **raw** como aclaración sobre **cuál** candidato (**thread.pending.candidates**) eligió el usuario (compará con **label**/fecha/hora de cada fila; **no** elijas por orden de lista).
+- Si un candidato queda claro según **raw**, fijá **target** a su **id** técnico (no en **q**/**r**).
+- Según **pending.original_action** (p. ej. **update**):
+  - Si la modificación pedida sigue **ambiguo** (p. ej. «a las 8» → **08:00** vs **20:00**), devolvé **s = ask**, **a = update**, **target** ese id, **q** cerrada, **pending.field** **time**, **options** coherentes, **update_field**, como en **Actualización**.
+- Si **original_action** es **delete** (o el flujo era borrar) y ya hay **target**: **no** **ready/delete** directo aún salvo que antes pidas **delete_confirmation** (**field** **delete_confirmation**, **options** **sí**/**no**) según reglas de **BORRADO SEGURO**.
+- Si sigue sin quedar claro, otra **ask** con **q** natural sin UUIDs visibles.
+
+
 Reglas de hora ambigua:
 
 Si el usuario dice «a las 7»:
@@ -234,14 +244,33 @@ REGLAS CRÍTICAS — mode = context_response (segunda llamada interna después d
   - **Jamás respondas ready/delete en este turno** (solo confirmación previa desde Aris después de más turnos usuario).
   - Con **count = 0**: **answer** o **fail** natural; **no inventes** agenda.
   - Con **count = 1**: **ask**, **i = event**, **a = delete**, **target** técnico UUID del candidato, **q** de confirmación (**sin IDs** en texto visible), **pending** típico: **field** **delete_confirmation**, **options** **[\"sí\", \"no\"]**, **target** técnico idéntico en **pending.target**.
-  - Con **count > 1**: **ask** sin borrar hasta desambiguar (lista conversacional sin UUIDs).
+  - Con **count > 1**: **s = ask**, **target** **null**, **q** natural sin UUIDs; **pending** con **field** **target_selection**, **candidates** **{ id, label }** desde **context.candidatos**, **original_action**: **delete** (**sin ready/delete** en este turno).
 
 - Si **thread.action** **no** es **query** ni **delete** (p. ej. modificación donde **a** anterior era **update** u otras piezas ya descritas en **Actualización**):
   - Usa **thread.ctx_requested** (domain/query/filters) junto con **context.candidatos** para elegir objeto o aclarar; los **ids** sólo pueden alimentar **target** técnico, **nunca** van en texto visible (**q**/ **r`).
   - Si **count = 0**: **answer** o **fail** razonables; **no inventes** agenda.
-  - Si **count = 1** y encaja como objetivo único para el siguiente paso, podés usar **target** como **string** UUID del candidato (u objeto **`{\"id\":\"<uuid>\"}`** antes de compactar).
-  - Si **count > 1** y hace falta elegir persona/evento antes de proseguir, **ask** con **pending** claro como en **Actualización**.
-  - Si la **hora** u otro dato sigue **ambiguo**, **ask** cerrado antes de cualquier **ready**/update.
+  - Si **count = 1** y encaja como objetivo único para el siguiente paso, podés usar **target** como **string** UUID del candidato (u objeto **`{\"id\":\"<uuid>\"}`** antes de compactar); si el cambio pedido sigue ambiguo (p. ej. hora coloquial), seguí con **ask** como en **Actualización** antes de **ready**/update.
+  - Si **count > 1** y hay varios eventos: **no** elijas uno arbitrariamente. Devolvé **s = ask**, **i = event**, **a = update**, **target** **null**, **q** breve sin IDs; **pending** con **field** **target_selection**, **candidates** (lista compacta **id** + **label** por fila técnica), **original_action**: **update**, **original_obj**: copia del **obj** pedido (p. ej. **{\"time\": \"8\"}**). Forma típica:
+    {
+      \"s\": \"ask\",
+      \"i\": \"event\",
+      \"a\": \"update\",
+      \"obj\": {\"time\": \"8\"},
+      \"target\": null,
+      \"q\": \"Tengo varias citas con Luis. ¿Cuál quieres modificar: la de mañana a las 10:00 o la del viernes a las 19:00?\",
+      \"r\": null,
+      \"pending\": {
+        \"field\": \"target_selection\",
+        \"candidates\": [
+          {\"id\": \"<uuid-1>\", \"label\": \"cita con Luis · mañana · 10:00\"},
+          {\"id\": \"<uuid-2>\", \"label\": \"cita con Luis · viernes · 19:00\"}
+        ],
+        \"original_action\": \"update\",
+        \"original_obj\": {\"time\": \"8\"}
+      },
+      \"ctx\": null
+    }
+  - Si la **hora** (u otro dato nuevo) sigue **ambigua** aun con **target** claro, **ask** cerrado antes de cualquier **ready**/update.
   - Caso guía «cambia la cita … de las 7 a las 8»: candidatos con **19:00** pueden alinear «de las 7» pero «a las 8» puede seguir abierta (**08:00** vs **20:00**).
   - Cuando haya **ready**/update con **target** válido y **obj** explícitos, **Aris** ejecuta la persistencia (**v0.47.12+**).
 

@@ -48,7 +48,11 @@ FAIL_DEFAULT: dict[str, Any] = {
 
 
 def build_payload(raw_text: str, thread_state: dict[str, Any] | None) -> dict[str, Any]:
-    """Empaqueta texto y hilo abierto sin semántica. Si open=true, jamás mode=new."""
+    """Empaqueta texto y hilo abierto sin semántica.
+
+    Si **open=true**: **mode=continue** y **thread** incluye **intent**, **object**,
+    **last_question**, **pending** y **target** (puede ser null).
+    """
     raw = (raw_text or "").strip()
 
     base: dict[str, Any] = {

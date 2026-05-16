@@ -146,11 +146,21 @@ class ArisMinimalEngine:
 
         if s == "ask":
             tid = extract_event_target_id(result)
+            obj_out: dict[str, Any] = (
+                dict(result["obj"]) if isinstance(result.get("obj"), dict) else {}
+            )
+            pend_raw = result.get("pending")
+            if isinstance(pend_raw, dict) and pend_raw.get("field") == "target_selection":
+                oo = pend_raw.get("original_obj")
+                if isinstance(oo, dict) and oo:
+                    merged = dict(oo)
+                    merged.update(obj_out)
+                    obj_out = merged
             self._thread_store.save_state(
                 {
                     "open": True,
                     "intent": result["i"],
-                    "object": result["obj"],
+                    "object": obj_out,
                     "last_question": result["q"],
                     "pending": result["pending"],
                     "target": tid,

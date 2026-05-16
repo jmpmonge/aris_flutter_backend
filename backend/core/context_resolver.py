@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
+_MAX_CALENDAR_CANDIDATES = 5
+
 _DOMINIO_CALENDARIO_EN = "calendar"
 _CONSULTAS_SOPORTADAS = frozenset(
     {
@@ -48,6 +50,7 @@ def resolver_contexto(
         candidatos_raw = _resolver_calendario(
             consulta, filtros_entrada, events_store
         )
+        candidatos_raw = _unique_stable_limit(candidatos_raw, _MAX_CALENDAR_CANDIDATES)
         candidatos_serializados = [
             _candidate_from_event(ev) for ev in candidatos_raw
         ]
@@ -100,6 +103,28 @@ def _resolver_calendario(
         return out
 
     return []
+
+
+def _unique_stable_limit(
+    rows: list[dict[str, Any]],
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Sin interpretación semántica: id único, orden estable por id, tope de recuento."""
+    by_id: dict[str, dict[str, Any]] = {}
+    for ev in rows:
+        if not isinstance(ev, dict):
+            continue
+        eid = str(ev.get("id") or "").strip()
+        if not eid or eid in by_id:
+            continue
+        by_id[eid] = ev
+    sorted_ids = sorted(by_id.keys())
+    out: list[dict[str, Any]] = []
+    for i in sorted_ids:
+        out.append(by_id[i])
+        if len(out) >= limit:
+            break
+    return out
 
 
 def _filtro_people(filtros: dict[str, Any]) -> list[str]:
@@ -213,14 +238,14 @@ def _candidate_from_event(ev: dict[str, Any]) -> dict[str, Any]:
         else ""
     )
 
-    pts: list[str] = []
+    parts: list[str] = []
     if titulo:
-        pts.append(titulo)
+        parts.append(titulo)
     if dte:
-        pts.append(dte)
+        parts.append(str(dte).strip())
     if tte:
-        pts.append(tte)
-    label = " · ".join(pts)
+        parts.append(str(tte).strip())
+    label = " · ".join(parts)
 
     participants = [
         x for x in _participant_strs(ev) if x

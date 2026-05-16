@@ -367,12 +367,141 @@ def smoke_6_delete_confirmation() -> None:
     print("smoke 6 OK (confirmación borrado evento)")
 
 
+def smoke_7_8_multiple_candidates_update() -> None:
+    """v0.47.17: need_context + ask target_selection → continue + ask hora sin ready."""
+    r_need: dict[str, Any] = {
+        "s": "need_context",
+        "i": "event",
+        "a": "update",
+        "obj": {"time": "8"},
+        "target": None,
+        "q": None,
+        "r": None,
+        "pending": None,
+        "ctx": {
+            "domain": "calendar",
+            "query": "events_by_person",
+            "filters": {"people": ["Luis"]},
+        },
+    }
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        engine = _make_engine(base)
+        ev1 = engine._events.add_event(
+            {
+                "title": "cita con Luis",
+                "date_text": "mañana",
+                "time_text": "10:00",
+                "participants": ["Luis"],
+            }
+        )
+        ev2 = engine._events.add_event(
+            {
+                "title": "cita con Luis",
+                "date_text": "viernes",
+                "time_text": "19:00",
+                "participants": ["Luis"],
+            }
+        )
+        id1 = str(ev1["id"])
+        id2 = str(ev2["id"])
+        q_sel = (
+            "Tengo varias citas con Luis. ¿Cuál quieres modificar: "
+            "la de mañana a las 10:00 o la del viernes a las 19:00?"
+        )
+        r_pick: dict[str, Any] = {
+            "s": "ask",
+            "i": "event",
+            "a": "update",
+            "obj": {"time": "8"},
+            "target": None,
+            "q": q_sel,
+            "r": None,
+            "pending": {
+                "field": "target_selection",
+                "candidates": [
+                    {"id": id1, "label": "cita con Luis · mañana · 10:00"},
+                    {"id": id2, "label": "cita con Luis · viernes · 19:00"},
+                ],
+                "original_action": "update",
+                "original_obj": {"time": "8"},
+            },
+            "ctx": None,
+        }
+        seq1 = iter([r_need, r_pick])
+
+        def fake1(_p: dict[str, Any]) -> dict[str, Any] | None:
+            return next(seq1)
+
+        with patch.object(engine_mod, "ask_gpt", side_effect=fake1):
+            t1, _, _, _ = engine.process_message(
+                "cambia la cita con Luis a las 8"
+            )
+        _assert_no_uuid_in_visible(t1, "smoke7")
+        if t1.strip() != q_sel:
+            raise AssertionError(f"smoke7 pregunta selección: {t1!r}")
+        evs = engine._events.list_events()
+        if len(evs) != 2:
+            raise AssertionError("smoke7: debía haber dos eventos")
+        by_id = {str(e.get("id")): e for e in evs}
+        if str(by_id[id1].get("time_text")) != "10:00":
+            raise AssertionError("smoke7: evento 1 no debía modificarse")
+        if str(by_id[id2].get("time_text")) != "19:00":
+            raise AssertionError("smoke7: evento 2 no debía modificarse")
+        st7 = engine._thread_store.get_state()
+        if not st7.get("open"):
+            raise AssertionError("smoke7: hilo abierto")
+        p7 = st7.get("pending") or {}
+        if p7.get("field") != "target_selection":
+            raise AssertionError(f"smoke7 pending: {p7!r}")
+
+        r_time: dict[str, Any] = {
+            "s": "ask",
+            "i": "event",
+            "a": "update",
+            "obj": {"time": "8"},
+            "target": id2,
+            "q": "¿Quieres cambiarla a las 8:00 o a las 20:00?",
+            "r": None,
+            "pending": {
+                "field": "time",
+                "options": ["08:00", "20:00"],
+                "target": id2,
+                "update_field": "time",
+            },
+            "ctx": None,
+        }
+        with patch.object(engine_mod, "ask_gpt", return_value=r_time):
+            t2, _, _, _ = engine.process_message("la del viernes")
+        _assert_no_uuid_in_visible(t2, "smoke8")
+        if "8:00" not in t2 and "20:00" not in t2:
+            raise AssertionError(f"smoke8 pregunta hora: {t2!r}")
+        evs2 = engine._events.list_events()
+        by_id2 = {str(e.get("id")): e for e in evs2}
+        if str(by_id2[id1].get("time_text")) != "10:00":
+            raise AssertionError("smoke8: evento 1 intacto")
+        if str(by_id2[id2].get("time_text")) != "19:00":
+            raise AssertionError("smoke8: evento 2 aún sin persistir el cambio")
+        st8 = engine._thread_store.get_state()
+        if not st8.get("open"):
+            raise AssertionError("smoke8: hilo abierto (pendiente hora)")
+        p8 = st8.get("pending") or {}
+        if p8.get("field") != "time":
+            raise AssertionError(f"smoke8 pending: {p8!r}")
+        if str(st8.get("target") or "").strip() != id2 and str(p8.get("target") or "").strip() != id2:
+            raise AssertionError("smoke8: target id2")
+
+    print("smoke 7-8 OK (varios candidatos update)")
+
+
+
 def main() -> int:
     try:
         smoke_1_2_ambiguous_then_continue()
         smoke_3_4()
         smoke_5_query()
         smoke_6_delete_confirmation()
+        smoke_7_8_multiple_candidates_update()
     except AssertionError as e:
         print(f"FAIL: {e}", file=sys.stderr)
         return 1
