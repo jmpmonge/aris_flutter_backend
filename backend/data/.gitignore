@@ -1,0 +1,9 @@
+# Datos locales generados en ejecución
+events.json
+tasks.json
+notes.json
+thread_state.json
+
+# Mantener carpeta versionada
+!.gitignore
+!.gitkeep
