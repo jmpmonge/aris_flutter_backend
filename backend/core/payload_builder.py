@@ -48,6 +48,7 @@ FAIL_DEFAULT: dict[str, Any] = {
 
 
 def build_payload(raw_text: str, thread_state: dict[str, Any] | None) -> dict[str, Any]:
+    """Empaqueta texto y hilo abierto sin semántica. Si open=true, jamás mode=new."""
     raw = (raw_text or "").strip()
 
     base: dict[str, Any] = {
@@ -66,6 +67,7 @@ def build_payload(raw_text: str, thread_state: dict[str, Any] | None) -> dict[st
         }
         base["rules"] = {
             "ambiguous_hour": "do_not_reopen_if_option_matches",
+            "continuation": "follow_thread_pending_resolve_then_ready_no_reask_hour",
             "hide_internal": True,
         }
     else:

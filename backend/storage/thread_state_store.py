@@ -1,4 +1,10 @@
-"""Estado de hilo conversacional — persistencia sin semántica."""
+"""Estado de hilo conversacional — persistencia sin semántica.
+
+Contrato v0.47 (para empaquetar en GPT con mode=continue):
+open, intent, object, last_question, pending (y updated_at automático).
+
+Aris solo persiste estos campos; no reinterpreta contenido aquí.
+"""
 
 from __future__ import annotations
 
