@@ -197,13 +197,19 @@ class ArisMinimalEngine:
         if a == "create":
             return self._handle_ready_create(result, i, obj)
 
+        if a == "query":
+            self._thread_store.clear_state()
+            r = result.get("r")
+            reply = sanitize_visible_text(r) if isinstance(r, str) else ""
+            return (reply or _MSG_OK, "consulta", None, None)
+
         if a == "update":
             if i == "event":
                 return self._handle_ready_update_event(result)
             self._thread_store.clear_state()
             return (_MSG_UNSUPPORTED_MODIFY, "consulta", None, None)
 
-        # delete/query/complete/draft u otros — no ejecutar en v0.47.12
+        # delete/complete/draft u otros — no ejecutar en v0.47.13 (query solo lectura arriba)
         self._thread_store.clear_state()
         return (_MSG_UNSUPPORTED, "consulta", None, None)
 

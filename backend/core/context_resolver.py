@@ -1,4 +1,9 @@
-"""Resolución técnica de solicitudes de contexto estructuradas — sin semántica del raw del usuario."""
+"""Resolución técnica de solicitudes de contexto estructuradas — sin semántica del raw del usuario.
+
+events_by_date: comparación sólo contra **date_text** del evento (sin convertir calendarios).
+Los valores habituales en filtros/date deben coincidir como texto con lo almacenado; p.ej.:
+**hoy**, **mañana**, **lunes** … **domingo** si así figura en **date_text**.
+"""
 
 from __future__ import annotations
 
@@ -158,11 +163,17 @@ def _matchea_person(ev: dict[str, Any], personas: Iterable[str]) -> bool:
     return False
 
 
+def _normalize_date_text_compare(s: str) -> str:
+    return " ".join(str(s).strip().split()).casefold()
+
+
 def _matchea_fecha_ev(ev: dict[str, Any], filt_fecha: str) -> bool:
     ev_d = _date_txt(ev)
     if ev_d is None:
         return False
-    return filt_fecha.strip().lower() == ev_d.strip().lower()
+    return _normalize_date_text_compare(filt_fecha) == _normalize_date_text_compare(
+        ev_d
+    )
 
 
 def _valor_t_normalizado(tiempo_evento: str | None) -> str | None:
