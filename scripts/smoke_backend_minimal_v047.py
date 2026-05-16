@@ -712,6 +712,161 @@ def smoke_10_note_create_basic() -> None:
     print("smoke 10 OK (note create básico)")
 
 
+def smoke_11_task_query_basic() -> None:
+    """v0.47.20: need_context task/query → context_response + answer."""
+    r_need_all: dict[str, Any] = {
+        "s": "need_context",
+        "i": "task",
+        "a": "query",
+        "obj": {},
+        "target": None,
+        "q": None,
+        "r": None,
+        "pending": None,
+        "ctx": {
+            "domain": "tasks",
+            "query": "list_tasks",
+            "filters": {},
+        },
+    }
+    r_ans_two: dict[str, Any] = {
+        "s": "answer",
+        "i": "task",
+        "a": "query",
+        "obj": {},
+        "target": None,
+        "q": None,
+        "r": (
+            "Tienes estas tareas: comprar leche para mañana "
+            "y llamar al dentista."
+        ),
+        "pending": None,
+        "ctx": None,
+    }
+
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        engine = _make_engine(base)
+        engine._tasks.add_task(
+            {"title": "comprar leche", "date_text": "mañana"}
+        )
+        engine._tasks.add_task({"title": "llamar al dentista"})
+        before = sorted(
+            [(str(x.get("id")), x.get("title")) for x in engine._tasks.list_tasks()],
+            key=lambda p: p[0],
+        )
+        seq = iter([r_need_all, r_ans_two])
+
+        def fak(_p: dict[str, Any]) -> dict[str, Any] | None:
+            return next(seq)
+
+        with patch.object(engine_mod, "ask_gpt", side_effect=fak):
+            t1, _, _, _ = engine.process_message("¿Qué tareas tengo?")
+        if "comprar leche" not in t1 or "llamar al dentista" not in t1:
+            raise AssertionError(f"smoke11A: {t1!r}")
+        _assert_no_uuid_in_visible(t1, "smoke11A")
+        after = sorted(
+            [(str(x.get("id")), x.get("title")) for x in engine._tasks.list_tasks()],
+            key=lambda p: p[0],
+        )
+        if before != after:
+            raise AssertionError(f"smoke11A persistencia cambió: {after!r}")
+        if len(after) != 2:
+            raise AssertionError("smoke11A dos tareas")
+        if engine._events.list_events() or engine._notes.list_notes():
+            raise AssertionError("smoke11A sin event/nota")
+        if engine._thread_store.get_state().get("open"):
+            raise AssertionError("smoke11A hilo cerrado")
+
+    r_ans_none: dict[str, Any] = {
+        "s": "answer",
+        "i": "task",
+        "a": "query",
+        "obj": {},
+        "target": None,
+        "q": None,
+        "r": "No encuentro tareas con esos datos.",
+        "pending": None,
+        "ctx": None,
+    }
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        engine = _make_engine(base)
+        seq2 = iter([r_need_all, r_ans_none])
+
+        def fak2(_p: dict[str, Any]) -> dict[str, Any] | None:
+            return next(seq2)
+
+        with patch.object(engine_mod, "ask_gpt", side_effect=fak2):
+            tb, _, _, _ = engine.process_message("¿Qué tareas tengo?")
+        if (
+            "No encuentro tareas" not in tb
+            and r_ans_none["r"] != tb.strip()
+        ):
+            raise AssertionError(f"smoke11B vacío: {tb!r}")
+        if engine._tasks.list_tasks():
+            raise AssertionError("smoke11B sin crear tareas")
+        if engine._thread_store.get_state().get("open"):
+            raise AssertionError("smoke11B hilo cerrado")
+
+    r_need_m: dict[str, Any] = {
+        "s": "need_context",
+        "i": "task",
+        "a": "query",
+        "obj": {},
+        "target": None,
+        "q": None,
+        "r": None,
+        "pending": None,
+        "ctx": {
+            "domain": "tasks",
+            "query": "list_tasks",
+            "filters": {"date": "mañana"},
+        },
+    }
+    r_ans_m: dict[str, Any] = {
+        "s": "answer",
+        "i": "task",
+        "a": "query",
+        "obj": {},
+        "target": None,
+        "q": None,
+        "r": "Para mañana tienes la tarea comprar leche.",
+        "pending": None,
+        "ctx": None,
+    }
+
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        engine = _make_engine(base)
+        engine._tasks.add_task(
+            {"title": "comprar leche", "date_text": "mañana"}
+        )
+        engine._tasks.add_task(
+            {"title": "llamar al dentista", "date_text": "viernes"}
+        )
+        before_c = [(str(x["id"]), x["title"]) for x in engine._tasks.list_tasks()]
+        seq3 = iter([r_need_m, r_ans_m])
+
+        def fak3(_p: dict[str, Any]) -> dict[str, Any] | None:
+            return next(seq3)
+
+        with patch.object(engine_mod, "ask_gpt", side_effect=fak3):
+            tc, _, _, _ = engine.process_message(
+                "¿Qué tareas tengo mañana?"
+            )
+        if "comprar leche" not in tc:
+            raise AssertionError(f"smoke11C: {tc!r}")
+        if "dentista" in tc.lower():
+            raise AssertionError("smoke11C no debe mezclar otra fecha en mock corto")
+        _assert_no_uuid_in_visible(tc, "smoke11C")
+        after_c = {(str(x["id"]), x["title"]) for x in engine._tasks.list_tasks()}
+        if {(b[0], b[1]) for b in before_c} != after_c:
+            raise AssertionError("smoke11C tareas modificadas")
+
+    print("smoke 11 OK (consulta de tareas básica)")
+
+
 def main() -> int:
     try:
         smoke_1_2_ambiguous_then_continue()
@@ -721,6 +876,7 @@ def main() -> int:
         smoke_7_8_multiple_candidates_update()
         smoke_9_task_create_basic()
         smoke_10_note_create_basic()
+        smoke_11_task_query_basic()
     except AssertionError as e:
         print(f"FAIL: {e}", file=sys.stderr)
         return 1

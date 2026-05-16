@@ -1,8 +1,7 @@
 """Resolución técnica de solicitudes de contexto estructuradas — sin semántica del raw del usuario.
 
-events_by_date: comparación sólo contra **date_text** del evento (sin convertir calendarios).
-Los valores habituales en filtros/date deben coincidir como texto con lo almacenado; p.ej.:
-**hoy**, **mañana**, **lunes** … **domingo** si así figura en **date_text**.
+Calendar: **`events_*`** sólo igualan **date_text** / personas / tiempo almacenados (sin resolver calendarios).
+Tasks: **`list_tasks`** con filtros triviales opcionales (**completed**, **date**/**date_text**, **priority**) sin interpretación semántica extra.
 """
 
 from __future__ import annotations
@@ -10,8 +9,11 @@ from __future__ import annotations
 from typing import Any, Iterable
 
 _MAX_CALENDAR_CANDIDATES = 5
+_MAX_TASK_CANDIDATES = 50
 
 _DOMINIO_CALENDARIO_EN = "calendar"
+_DOMINIOS_TAREAS_EN = frozenset({"tasks", "task"})
+_QUERY_TAREA_LIST_TASKS = "list_tasks"
 _CONSULTAS_SOPORTADAS = frozenset(
     {
         "events_by_person",
@@ -32,7 +34,7 @@ def resolver_contexto(
     notes_store=None,
 ) -> dict[str, Any]:
     """Recibe una solicitud de contexto (p. ej. ctx de GPT) y devuelve candidatos."""
-    del tasks_store, notes_store
+    del notes_store
 
     sc = solicitud_contexto if isinstance(solicitud_contexto, dict) else {}
 
@@ -54,6 +56,12 @@ def resolver_contexto(
         candidatos_serializados = [
             _candidate_from_event(ev) for ev in candidatos_raw
         ]
+    elif dominio_consulta_en in _DOMINIOS_TAREAS_EN:
+        candidatos_raw = _resolver_tareas_list(
+            consulta, filtros_entrada, tasks_store
+        )
+        candidatos_raw = _unique_stable_limit(candidatos_raw, _MAX_TASK_CANDIDATES)
+        candidatos_serializados = [_candidate_from_task(t) for t in candidatos_raw]
 
     return {
         "dominio": dominio_etiqueta or dominio_consulta_en or "",
@@ -125,6 +133,93 @@ def _unique_stable_limit(
         if len(out) >= limit:
             break
     return out
+
+
+def _resolver_tareas_list(
+    consulta: str,
+    filtros: dict[str, Any],
+    tasks_store,
+) -> list[dict[str, Any]]:
+    if str(consulta or "").strip() != _QUERY_TAREA_LIST_TASKS:
+        return []
+    lista = (
+        tasks_store.list_tasks() if tasks_store is not None and hasattr(tasks_store, "list_tasks") else []
+    )
+    out: list[dict[str, Any]] = []
+    for t in lista:
+        if not isinstance(t, dict):
+            continue
+        if _FILTRO_COMPLETED in filtros:
+            if bool(t.get("completed")) != bool(filtros.get(_FILTRO_COMPLETED)):
+                continue
+        date_needle = filtros.get("date")
+        if date_needle is None or str(date_needle).strip() == "":
+            date_needle = filtros.get("date_text")
+        if date_needle is not None and str(date_needle).strip() != "":
+            td = _task_date_text_plain(t.get("date_text"))
+            if td is None:
+                continue
+            if _normalize_date_text_compare(str(date_needle)) != _normalize_date_text_compare(td):
+                continue
+        prio_f = filtros.get("priority")
+        if prio_f is not None and str(prio_f).strip() != "":
+            tp = t.get("priority")
+            if tp is None or str(tp).strip() == "":
+                continue
+            if _norm_basico(tp) != _norm_basico(prio_f):
+                continue
+        out.append(t)
+    return out
+
+
+_FILTRO_COMPLETED = "completed"
+
+
+def _task_date_text_plain(v: Any) -> str | None:
+    if v is None:
+        return None
+    s = str(v).strip()
+    return s or None
+
+
+def _candidate_from_task(t: dict[str, Any]) -> dict[str, Any]:
+    eid = str(t.get("id") or "").strip()
+    titulo = str(t.get("title") or "").strip()
+
+    dt = _task_date_text_plain(t.get("date_text"))
+
+    tm_raw = t.get("time_text")
+    tm = (
+        str(tm_raw).strip()
+        if tm_raw is not None and str(tm_raw).strip()
+        else ""
+    )
+
+    parts: list[str] = []
+    if titulo:
+        parts.append(titulo)
+    if dt:
+        parts.append(dt)
+    if tm:
+        parts.append(tm)
+    label = " · ".join(parts)
+
+    pr = t.get("priority")
+    priority_out = (
+        str(pr).strip()
+        if pr is not None and str(pr).strip()
+        else None
+    )
+
+    return {
+        "id": eid,
+        "label": label,
+        "title": titulo or None,
+        "date_text": dt,
+        "time_text": tm if tm else None,
+        "completed": bool(t.get("completed")),
+        "priority": priority_out,
+    }
 
 
 def _filtro_people(filtros: dict[str, Any]) -> list[str]:
