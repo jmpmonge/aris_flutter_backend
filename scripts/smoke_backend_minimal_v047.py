@@ -107,6 +107,10 @@ def smoke_1_2_ambiguous_then_continue() -> None:
             ev = evs[0]
             if str(ev.get("time_text")) != "19:00":
                 raise AssertionError(f"smoke2 time_text: {ev.get('time_text')!r}")
+            if "raw_text" in ev:
+                raise AssertionError(
+                    "smoke2: el evento no debe persistirse con raw_text como dominio final"
+                )
             if "Luis" not in (ev.get("participants") or []):
                 raise AssertionError(f"smoke2 participants: {ev.get('participants')!r}")
             st2 = engine._thread_store.get_state()
