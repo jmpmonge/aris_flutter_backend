@@ -749,7 +749,8 @@ class ArisMinimalEngine:
 
         snapshot = dict(snap_evt)
 
-        if not self._events.delete_event(tid):
+        removed = self._events.delete_event(tid)
+        if removed is None:
             self._thread_store.clear_state()
             return (
                 "No encuentro ese evento en tu agenda local.",

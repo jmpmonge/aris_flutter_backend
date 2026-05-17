@@ -255,6 +255,37 @@ def main() -> int:
                 )
                 return 1
 
+            # --- DELETE EVENTO CASO E: evento existente ---
+            ev_list = client.get("/events").json()
+            if not ev_list:
+                print("FAIL DELETE /events: no hay eventos en store", file=sys.stderr)
+                return 1
+            ev_id = str(ev_list[0]["id"])
+            r_del_ev = client.delete(f"/events/{ev_id}")
+            if r_del_ev.status_code != 200:
+                print(
+                    f"FAIL DELETE /events existente: {r_del_ev.status_code} {r_del_ev.text}",
+                    file=sys.stderr,
+                )
+                return 1
+            jde = r_del_ev.json()
+            if not jde.get("ok") or str(jde.get("deleted", {}).get("id") or "") != ev_id:
+                print(f"FAIL DELETE /events respuesta: {jde!r}", file=sys.stderr)
+                return 1
+            remaining_events = client.get("/events").json()
+            if any(str(e.get("id")) == ev_id for e in remaining_events):
+                print("FAIL DELETE /events: evento sigue en GET /events", file=sys.stderr)
+                return 1
+
+            # --- DELETE EVENTO CASO F: evento inexistente ---
+            r_del_ev_404 = client.delete("/events/missing-id-00000")
+            if r_del_ev_404.status_code != 404:
+                print(
+                    f"FAIL DELETE /events inexistente esperaba 404, fue {r_del_ev_404.status_code}",
+                    file=sys.stderr,
+                )
+                return 1
+
         finally:
             main_mod.tasks_store = prev_tasks
             main_mod.notes_store = prev_notes

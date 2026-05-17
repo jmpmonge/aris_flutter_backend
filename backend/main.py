@@ -59,6 +59,15 @@ def list_events() -> list[dict[str, Any]]:
     return events_store.list_events()
 
 
+@app.delete("/events/{event_id}")
+def delete_event(event_id: str) -> dict[str, Any]:
+    """Elimina un evento por id; sin GPT, sin thread_state."""
+    removed = events_store.delete_event(event_id)
+    if removed is None:
+        raise HTTPException(status_code=404, detail="Not Found")
+    return {"ok": True, "deleted": removed}
+
+
 @app.get("/tasks")
 def list_tasks() -> list[dict[str, Any]]:
     return tasks_store.list_tasks()

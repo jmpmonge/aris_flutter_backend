@@ -131,16 +131,18 @@ class EventsStore:
         save_json_list(self._path, items)
         return cur
 
-    def delete_event(self, event_id: str) -> bool:
+    def delete_event(self, event_id: str) -> dict[str, Any] | None:
+        """Elimina por id; devuelve el objeto eliminado o None si no existía."""
         eid = str(event_id).strip()
         if not eid:
-            return False
+            return None
         items = self.list_events()
-        new_items = [ev for ev in items if str(ev.get("id")) != eid]
-        if len(new_items) == len(items):
-            return False
-        save_json_list(self._path, new_items)
-        return True
+        idx = next((i for i, ev in enumerate(items) if str(ev.get("id")) == eid), None)
+        if idx is None:
+            return None
+        snapshot = dict(items[idx])
+        save_json_list(self._path, [ev for ev in items if str(ev.get("id")) != eid])
+        return snapshot
 
     @staticmethod
     def _opt_str(v: Any) -> str | None:
