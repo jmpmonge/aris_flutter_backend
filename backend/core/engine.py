@@ -228,7 +228,13 @@ class ArisMinimalEngine:
             self._thread_store.clear_state()
             return (_MSG_UNSUPPORTED, "consulta", None, None)
 
-        # complete/draft u otros — no ejecutar aquí (query tratado más arriba)
+        if a == "complete":
+            if i == "task":
+                return self._handle_ready_complete_task(result)
+            self._thread_store.clear_state()
+            return (_MSG_UNSUPPORTED, "consulta", None, None)
+
+        # draft u otros — no ejecutar aquí (query tratado más arriba)
         self._thread_store.clear_state()
         return (_MSG_UNSUPPORTED, "consulta", None, None)
 
@@ -274,6 +280,59 @@ class ArisMinimalEngine:
 
         self._thread_store.clear_state()
         return (_reply_del("He borrado el evento."), "calendario", None, None)
+
+    def _handle_ready_complete_task(
+        self, result: dict[str, Any]
+    ) -> tuple[str, str, dict[str, Any] | None, str | None]:
+        r_raw = result.get("r")
+
+        def _reply_done(default: str) -> str:
+            if isinstance(r_raw, str):
+                cleaned = sanitize_visible_text(r_raw)
+                if cleaned:
+                    return cleaned
+            return default
+
+        tid = extract_event_target_id(result)
+        if not tid:
+            self._thread_store.clear_state()
+            return (
+                "No sé qué tarea quieres completar. ¿Puedes concretarla?",
+                "consulta",
+                None,
+                None,
+            )
+
+        cur = next(
+            (t for t in self._tasks.list_tasks() if str(t.get("id")) == tid),
+            None,
+        )
+        if cur is None:
+            self._thread_store.clear_state()
+            return (
+                "No encuentro esa tarea en tu lista.",
+                "consulta",
+                None,
+                None,
+            )
+
+        updated = self._tasks.complete_task(tid)
+        if updated is None:
+            self._thread_store.clear_state()
+            return (
+                "No he podido completar esa tarea.",
+                "consulta",
+                None,
+                None,
+            )
+
+        self._thread_store.clear_state()
+        return (
+            _reply_done("He marcado la tarea como completada."),
+            "tarea",
+            updated,
+            None,
+        )
 
     def _handle_ready_update_event(
         self, result: dict[str, Any]

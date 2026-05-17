@@ -1,7 +1,7 @@
 """Resolución técnica de solicitudes de contexto estructuradas — sin semántica del raw del usuario.
 
 Calendar: **`events_*`** sólo igualan **date_text** / personas / tiempo almacenados (sin resolver calendarios).
-Tasks: **`list_tasks`** con filtros triviales opcionales (**completed**, **date**/**date_text**, **priority**) sin interpretación semántica extra.
+Tasks: **`list_tasks`** con filtros triviales opcionales (**completed**, **title** (subcadena **casefold** en título), **date**/**date_text**, **priority**) sin interpretación semántica extra.
 Notes: **`list_notes`** con filtros triviales opcionales (**text**/**content**, **title**, **tag**/**tags**) sólo igualdad textual o subcadena (**casefold**) sin interpretación semántica.
 """
 
@@ -172,6 +172,12 @@ def _resolver_tareas_list(
             continue
         if _FILTRO_COMPLETED in filtros:
             if bool(t.get("completed")) != bool(filtros.get(_FILTRO_COMPLETED)):
+                continue
+        title_f = filtros.get("title")
+        if title_f is not None and str(title_f).strip():
+            needle = str(title_f).strip().casefold()
+            ttitle = str(t.get("title") or "").strip().casefold()
+            if needle not in ttitle:
                 continue
         date_needle = filtros.get("date")
         if date_needle is None or str(date_needle).strip() == "":

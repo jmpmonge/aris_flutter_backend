@@ -2033,6 +2033,233 @@ def smoke_19_continue_guard_no_note_task() -> None:
     print("smoke 19 OK (guardia continuaciones sin nota/tarea accidental)")
 
 
+def smoke_20_task_complete_basic() -> None:
+    """v0.47.30: completar tarea vía ready/task/complete + need_context / selección."""
+    r_vis_done = (
+        "He marcado la tarea «comprar leche» como completada."
+    )
+
+    # --- CASO A: target claro ---
+    with tempfile.TemporaryDirectory() as d_a:
+        base = Path(d_a)
+        engine = _make_engine(base)
+        row = engine._tasks.add_task(
+            {"title": "comprar leche", "date_text": "mañana"}
+        )
+        tid = str(row["id"])
+        r_a: dict[str, Any] = {
+            "s": "ready",
+            "i": "task",
+            "a": "complete",
+            "obj": {},
+            "target": tid,
+            "q": None,
+            "r": r_vis_done,
+            "pending": None,
+            "ctx": None,
+        }
+        with patch.object(engine_mod, "ask_gpt", return_value=r_a):
+            tv, _, saved, _ = engine.process_message(
+                "marca comprar leche como hecha"
+            )
+        if "completada" not in (tv or "").lower():
+            raise AssertionError(f"smoke20A visible: {tv!r}")
+        if engine._events.list_events():
+            raise AssertionError("smoke20A sin eventos")
+        if engine._notes.list_notes():
+            raise AssertionError("smoke20A sin notas")
+        tasks_a = engine._tasks.list_tasks()
+        by_id_a = {str(t.get("id")): t for t in tasks_a}
+        ta = by_id_a.get(tid)
+        if ta is None:
+            raise AssertionError("smoke20A tarea debe existir")
+        if ta.get("completed") is not True:
+            raise AssertionError("smoke20A completed=True")
+        if saved is None or saved.get("completed") is not True:
+            raise AssertionError(f"smoke20A saved: {saved!r}")
+        if engine._thread_store.get_state().get("open"):
+            raise AssertionError("smoke20A hilo cerrado")
+
+    # --- CASO B: sin target ---
+    r_b: dict[str, Any] = {
+        "s": "ready",
+        "i": "task",
+        "a": "complete",
+        "obj": {},
+        "target": None,
+        "q": None,
+        "r": None,
+        "pending": None,
+        "ctx": None,
+    }
+    with tempfile.TemporaryDirectory() as d_b:
+        base = Path(d_b)
+        engine = _make_engine(base)
+        engine._tasks.add_task({"title": "persistir incompleta"})
+        with patch.object(engine_mod, "ask_gpt", return_value=r_b):
+            tb, _, _, _ = engine.process_message(
+                "marca una tarea como hecha"
+            )
+        if (
+            "concret" not in (tb or "").lower()
+            and "qué tarea" not in (tb or "").lower()
+        ):
+            raise AssertionError(f"smoke20B debía pedir concreción: {tb!r}")
+        if any(
+            bool(t.get("completed")) for t in engine._tasks.list_tasks()
+        ):
+            raise AssertionError("smoke20B ninguna debe completarse")
+        if engine._thread_store.get_state().get("open"):
+            raise AssertionError("smoke20B hilo debe cerrarse")
+
+    # --- CASO C: need_context + segunda llamada ---
+    r_c1: dict[str, Any] = {
+        "s": "need_context",
+        "i": "task",
+        "a": "complete",
+        "obj": {"title": "comprar leche"},
+        "target": None,
+        "q": None,
+        "r": None,
+        "pending": None,
+        "ctx": {
+            "domain": "tasks",
+            "query": "list_tasks",
+            "filters": {"completed": False, "title": "comprar leche"},
+        },
+    }
+    with tempfile.TemporaryDirectory() as d_c:
+        base = Path(d_c)
+        engine = _make_engine(base)
+        rc = engine._tasks.add_task(
+            {"title": "comprar leche", "date_text": "mañana"}
+        )
+        tid_c = str(rc["id"])
+        r_c2: dict[str, Any] = {
+            "s": "ready",
+            "i": "task",
+            "a": "complete",
+            "obj": {},
+            "target": tid_c,
+            "q": None,
+            "r": r_vis_done,
+            "pending": None,
+            "ctx": None,
+        }
+        seq_c = iter([r_c1, r_c2])
+
+        def fc(_p: dict[str, Any]) -> dict[str, Any] | None:
+            return next(seq_c)
+
+        with patch.object(engine_mod, "ask_gpt", side_effect=fc):
+            engine.process_message("marca comprar leche como hecha")
+        tsk = engine._tasks.list_tasks()
+        match = next(
+            (t for t in tsk if str(t.get("id")) == tid_c), None
+        )
+        if not match or match.get("completed") is not True:
+            raise AssertionError(f"smoke20C completed: {match!r}")
+        if engine._events.list_events() or engine._notes.list_notes():
+            raise AssertionError("smoke20C sin evento/nota")
+        if engine._thread_store.get_state().get("open"):
+            raise AssertionError("smoke20C hilo cerrado")
+
+    # --- CASO D + E: selección ---
+    q_sel = (
+        "Tengo varias tareas parecidas. ¿Cuál quieres completar: "
+        "llamar a Luis o llamar al dentista?"
+    )
+    r_d1: dict[str, Any] = {
+        "s": "need_context",
+        "i": "task",
+        "a": "complete",
+        "obj": {"title": "llamar"},
+        "target": None,
+        "q": None,
+        "r": None,
+        "pending": None,
+        "ctx": {
+            "domain": "tasks",
+            "query": "list_tasks",
+            "filters": {"completed": False, "title": "llamar"},
+        },
+    }
+
+    with tempfile.TemporaryDirectory() as d_de:
+        base = Path(d_de)
+        engine = _make_engine(base)
+        t_luis = engine._tasks.add_task({"title": "llamar a Luis"})
+        t_den = engine._tasks.add_task({"title": "llamar al dentista"})
+        id1 = str(t_luis["id"])
+        id2 = str(t_den["id"])
+        r_d2: dict[str, Any] = {
+            "s": "ask",
+            "i": "task",
+            "a": "complete",
+            "obj": {},
+            "target": None,
+            "q": q_sel,
+            "r": None,
+            "pending": {
+                "field": "target_selection",
+                "candidates": [
+                    {"id": id1, "label": "llamar a Luis"},
+                    {"id": id2, "label": "llamar al dentista"},
+                ],
+                "original_action": "complete",
+            },
+            "ctx": None,
+        }
+        r_d3: dict[str, Any] = {
+            "s": "ready",
+            "i": "task",
+            "a": "complete",
+            "obj": {},
+            "target": id2,
+            "q": None,
+            "r": (
+                "He marcado la tarea «llamar al dentista» como completada."
+            ),
+            "pending": None,
+            "ctx": None,
+        }
+        seq_de = iter([r_d1, r_d2])
+
+        def fde(_p: dict[str, Any]) -> dict[str, Any] | None:
+            return next(seq_de)
+
+        with patch.object(engine_mod, "ask_gpt", side_effect=fde):
+            t1, _, _, _ = engine.process_message("marca llamar como hecha")
+        _assert_no_uuid_in_visible(t1, "smoke20D")
+        if t1.strip() != q_sel:
+            raise AssertionError(f"smoke20D pregunta: {t1!r}")
+        if any(bool(t.get("completed")) for t in engine._tasks.list_tasks()):
+            raise AssertionError("smoke20D nadie completado aún")
+        st_d = engine._thread_store.get_state()
+        if not st_d.get("open"):
+            raise AssertionError(f"smoke20D abierto: {st_d!r}")
+        if (st_d.get("pending") or {}).get("field") != "target_selection":
+            raise AssertionError(f"smoke20D pending {st_d!r}")
+
+        with patch.object(engine_mod, "ask_gpt", return_value=r_d3):
+            t2, _, _, _ = engine.process_message("la del dentista")
+        _assert_no_uuid_in_visible(t2, "smoke20E")
+        lst = engine._tasks.list_tasks()
+        by = {str(x.get("id")): x for x in lst}
+        if by[id2].get("completed") is not True:
+            raise AssertionError(f"smoke20E dentista {by[id2]!r}")
+        if by[id1].get("completed") is True:
+            raise AssertionError("smoke20E Luis sigue pendiente")
+        needle = "la del dentista"
+        for rn in engine._notes.list_notes():
+            if needle in str(rn.get("content") or ""):
+                raise AssertionError(f"smoke20E nota accidental {rn!r}")
+        if engine._thread_store.get_state().get("open"):
+            raise AssertionError("smoke20E hilo cerrado")
+
+    print("smoke 20 OK (complete tarea mock + need_context / selección)")
+
+
 def main() -> int:
     try:
         smoke_1_2_ambiguous_then_continue()
@@ -2051,6 +2278,7 @@ def main() -> int:
         smoke_17_event_create_with_date_iso()
         smoke_18_clean_event_card_contract()
         smoke_19_continue_guard_no_note_task()
+        smoke_20_task_complete_basic()
     except AssertionError as e:
         print(f"FAIL: {e}", file=sys.stderr)
         return 1
