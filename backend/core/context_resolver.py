@@ -2,6 +2,7 @@
 
 Calendar: **`events_*`** sólo igualan **date_text** / personas / tiempo almacenados (sin resolver calendarios).
 Tasks: **`list_tasks`** con filtros triviales opcionales (**completed**, **date**/**date_text**, **priority**) sin interpretación semántica extra.
+Notes: **`list_notes`** con filtros triviales opcionales (**text**/**content**, **title**, **tag**/**tags**) sólo igualdad textual o subcadena (**casefold**) sin interpretación semántica.
 """
 
 from __future__ import annotations
@@ -10,10 +11,13 @@ from typing import Any, Iterable
 
 _MAX_CALENDAR_CANDIDATES = 5
 _MAX_TASK_CANDIDATES = 50
+_MAX_NOTE_CANDIDATES = 50
 
 _DOMINIO_CALENDARIO_EN = "calendar"
 _DOMINIOS_TAREAS_EN = frozenset({"tasks", "task"})
 _QUERY_TAREA_LIST_TASKS = "list_tasks"
+_DOMINIOS_NOTAS_EN = frozenset({"notes", "note"})
+_QUERY_NOTA_LIST_NOTES = "list_notes"
 _CONSULTAS_SOPORTADAS = frozenset(
     {
         "events_by_person",
@@ -34,8 +38,6 @@ def resolver_contexto(
     notes_store=None,
 ) -> dict[str, Any]:
     """Recibe una solicitud de contexto (p. ej. ctx de GPT) y devuelve candidatos."""
-    del notes_store
-
     sc = solicitud_contexto if isinstance(solicitud_contexto, dict) else {}
 
     filtros_entrada: dict[str, Any] = {}
@@ -62,6 +64,12 @@ def resolver_contexto(
         )
         candidatos_raw = _unique_stable_limit(candidatos_raw, _MAX_TASK_CANDIDATES)
         candidatos_serializados = [_candidate_from_task(t) for t in candidatos_raw]
+    elif dominio_consulta_en in _DOMINIOS_NOTAS_EN:
+        candidatos_raw = _resolver_notas_list(
+            consulta, filtros_entrada, notes_store
+        )
+        candidatos_raw = _unique_stable_limit(candidatos_raw, _MAX_NOTE_CANDIDATES)
+        candidatos_serializados = [_candidate_from_note(n) for n in candidatos_raw]
 
     return {
         "dominio": dominio_etiqueta or dominio_consulta_en or "",
@@ -219,6 +227,125 @@ def _candidate_from_task(t: dict[str, Any]) -> dict[str, Any]:
         "time_text": tm if tm else None,
         "completed": bool(t.get("completed")),
         "priority": priority_out,
+    }
+
+
+def _resolver_notas_list(
+    consulta: str,
+    filtros: dict[str, Any],
+    notes_store,
+) -> list[dict[str, Any]]:
+    if str(consulta or "").strip() != _QUERY_NOTA_LIST_NOTES:
+        return []
+    lista = (
+        notes_store.list_notes()
+        if notes_store is not None and hasattr(notes_store, "list_notes")
+        else []
+    )
+    out: list[dict[str, Any]] = []
+    for n in lista:
+        if not isinstance(n, dict):
+            continue
+        if not _nota_pasa_filtros_tecnicos(n, filtros):
+            continue
+        out.append(n)
+    return out
+
+
+def _note_title_plain(v: Any) -> str | None:
+    if v is None:
+        return None
+    s = str(v).strip()
+    return s or None
+
+
+def _etiquetas_filtro_pedidas(filtros: dict[str, Any]) -> list[str]:
+    out: list[str] = []
+    raw_tag = filtros.get("tag")
+    if raw_tag is not None and str(raw_tag).strip():
+        out.append(str(raw_tag).strip())
+    rt = filtros.get("tags")
+    if isinstance(rt, str):
+        s = rt.strip()
+        if s:
+            out.append(s)
+    elif isinstance(rt, list):
+        for x in rt:
+            sx = str(x).strip()
+            if sx:
+                out.append(sx)
+    return out
+
+
+def _nota_etiquetas_coinciden(note_tags: Any, etiquetas_pedidas: list[str]) -> bool:
+    if not etiquetas_pedidas:
+        return True
+    if not isinstance(note_tags, list):
+        return False
+    note_fold = {
+        str(t).strip().casefold() for t in note_tags if str(t).strip()
+    }
+    for ped in etiquetas_pedidas:
+        if ped.casefold() not in note_fold:
+            return False
+    return True
+
+
+def _nota_pasa_filtros_tecnicos(n: dict[str, Any], filtros: dict[str, Any]) -> bool:
+    needle_text = filtros.get("text")
+    if needle_text is None:
+        needle_text = filtros.get("content")
+    if needle_text is not None and str(needle_text).strip():
+        ncf = str(needle_text).strip().casefold()
+        tit_cf = str(n.get("title") or "").strip().casefold()
+        cnt_cf = str(n.get("content") or "").strip().casefold()
+        if ncf not in tit_cf and ncf not in cnt_cf:
+            return False
+
+    tit_fil = filtros.get("title")
+    if tit_fil is not None and str(tit_fil).strip():
+        nt = _note_title_plain(n.get("title"))
+        if nt is None:
+            return False
+        nf = str(tit_fil).strip().casefold()
+        ntc = nt.casefold()
+        if nf != ntc and nf not in ntc:
+            return False
+
+    ped_tags = _etiquetas_filtro_pedidas(filtros)
+    if ped_tags and not _nota_etiquetas_coinciden(n.get("tags"), ped_tags):
+        return False
+
+    return True
+
+
+def _candidate_from_note(n: dict[str, Any]) -> dict[str, Any]:
+    eid = str(n.get("id") or "").strip()
+    titulo = _note_title_plain(n.get("title"))
+    contenido = str(n.get("content") or "").strip()
+
+    tags_out: list[str] = []
+    tr = n.get("tags")
+    if isinstance(tr, list):
+        tags_out = [str(t).strip() for t in tr if str(t).strip()]
+
+    parts: list[str] = []
+    if titulo:
+        parts.append(titulo)
+    if contenido:
+        parts.append(contenido)
+    label = " · ".join(parts)
+
+    cre = n.get("created_at")
+    created_at = str(cre).strip() if cre is not None and str(cre).strip() else ""
+
+    return {
+        "id": eid,
+        "label": label,
+        "title": titulo or None,
+        "content": contenido,
+        "tags": tags_out,
+        "created_at": created_at if created_at else None,
     }
 
 

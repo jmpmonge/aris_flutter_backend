@@ -867,6 +867,168 @@ def smoke_11_task_query_basic() -> None:
     print("smoke 11 OK (consulta de tareas básica)")
 
 
+def smoke_12_note_query_basic() -> None:
+    """v0.47.21: need_context note/query → context_response + answer."""
+    r_need_all: dict[str, Any] = {
+        "s": "need_context",
+        "i": "note",
+        "a": "query",
+        "obj": {},
+        "target": None,
+        "q": None,
+        "r": None,
+        "pending": None,
+        "ctx": {
+            "domain": "notes",
+            "query": "list_notes",
+            "filters": {},
+        },
+    }
+    r_ans_two: dict[str, Any] = {
+        "s": "answer",
+        "i": "note",
+        "a": "query",
+        "obj": {},
+        "target": None,
+        "q": None,
+        "r": "Tienes estas notas: idea para Aris y voz.",
+        "pending": None,
+        "ctx": None,
+    }
+
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        engine = _make_engine(base)
+        engine._notes.add_note(
+            {"title": "idea para Aris", "content": "separar tareas y notas"}
+        )
+        engine._notes.add_note(
+            {"title": "voz", "content": "probar respuesta corta por defecto"}
+        )
+        before = sorted(
+            [(str(x.get("id")), x.get("title")) for x in engine._notes.list_notes()],
+            key=lambda p: p[0],
+        )
+        seq = iter([r_need_all, r_ans_two])
+
+        def fak(_p: dict[str, Any]) -> dict[str, Any] | None:
+            return next(seq)
+
+        with patch.object(engine_mod, "ask_gpt", side_effect=fak):
+            t1, _, _, _ = engine.process_message("¿Qué notas tengo?")
+        if "idea para Aris" not in t1 or "voz" not in t1:
+            raise AssertionError(f"smoke12A: {t1!r}")
+        _assert_no_uuid_in_visible(t1, "smoke12A")
+        after = sorted(
+            [(str(x.get("id")), x.get("title")) for x in engine._notes.list_notes()],
+            key=lambda p: p[0],
+        )
+        if before != after:
+            raise AssertionError(f"smoke12A persistencia cambió: {after!r}")
+        if len(after) != 2:
+            raise AssertionError("smoke12A dos notas")
+        if engine._events.list_events() or engine._tasks.list_tasks():
+            raise AssertionError("smoke12A sin evento ni tarea")
+        if engine._thread_store.get_state().get("open"):
+            raise AssertionError("smoke12A hilo cerrado")
+
+    r_ans_none: dict[str, Any] = {
+        "s": "answer",
+        "i": "note",
+        "a": "query",
+        "obj": {},
+        "target": None,
+        "q": None,
+        "r": "No encuentro notas con esos datos.",
+        "pending": None,
+        "ctx": None,
+    }
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        engine = _make_engine(base)
+        seq2 = iter([r_need_all, r_ans_none])
+
+        def fak2(_p: dict[str, Any]) -> dict[str, Any] | None:
+            return next(seq2)
+
+        with patch.object(engine_mod, "ask_gpt", side_effect=fak2):
+            tb, _, _, _ = engine.process_message("¿Qué notas tengo?")
+        if (
+            "No encuentro notas" not in tb
+            and r_ans_none["r"] != tb.strip()
+        ):
+            raise AssertionError(f"smoke12B vacío: {tb!r}")
+        if engine._notes.list_notes():
+            raise AssertionError("smoke12B sin crear notas")
+        if engine._events.list_events() or engine._tasks.list_tasks():
+            raise AssertionError("smoke12B sin evento ni tarea")
+        if engine._thread_store.get_state().get("open"):
+            raise AssertionError("smoke12B hilo cerrado")
+
+    r_need_txt: dict[str, Any] = {
+        "s": "need_context",
+        "i": "note",
+        "a": "query",
+        "obj": {},
+        "target": None,
+        "q": None,
+        "r": None,
+        "pending": None,
+        "ctx": {
+            "domain": "notes",
+            "query": "list_notes",
+            "filters": {
+                "text": "Aris",
+            },
+        },
+    }
+    r_ans_txt: dict[str, Any] = {
+        "s": "answer",
+        "i": "note",
+        "a": "query",
+        "obj": {},
+        "target": None,
+        "q": None,
+        "r": "Sobre Aris tienes la nota idea para Aris.",
+        "pending": None,
+        "ctx": None,
+    }
+
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        engine = _make_engine(base)
+        engine._notes.add_note(
+            {"title": "idea para Aris", "content": "separar tareas y notas"}
+        )
+        engine._notes.add_note(
+            {"title": "voz", "content": "probar respuesta corta por defecto"}
+        )
+        before_c = {
+            (str(x["id"]), x.get("title")) for x in engine._notes.list_notes()
+        }
+        seq3 = iter([r_need_txt, r_ans_txt])
+
+        def fak3(_p: dict[str, Any]) -> dict[str, Any] | None:
+            return next(seq3)
+
+        with patch.object(engine_mod, "ask_gpt", side_effect=fak3):
+            tc, _, _, _ = engine.process_message(
+                "¿Tengo alguna nota sobre Aris?"
+            )
+        if "Aris" not in tc:
+            raise AssertionError(f"smoke12C: {tc!r}")
+        _assert_no_uuid_in_visible(tc, "smoke12C")
+        after_c = {
+            (str(x["id"]), x.get("title")) for x in engine._notes.list_notes()
+        }
+        if before_c != after_c:
+            raise AssertionError("smoke12C notas modificadas")
+        if engine._thread_store.get_state().get("open"):
+            raise AssertionError("smoke12C hilo cerrado")
+
+    print("smoke 12 OK (consulta de notas básica)")
+
+
 def main() -> int:
     try:
         smoke_1_2_ambiguous_then_continue()
@@ -877,6 +1039,7 @@ def main() -> int:
         smoke_9_task_create_basic()
         smoke_10_note_create_basic()
         smoke_11_task_query_basic()
+        smoke_12_note_query_basic()
     except AssertionError as e:
         print(f"FAIL: {e}", file=sys.stderr)
         return 1
