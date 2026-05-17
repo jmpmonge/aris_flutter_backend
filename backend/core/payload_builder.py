@@ -58,8 +58,13 @@ def _local_calendar_date_iso(tz_name: str) -> str:
 def build_payload(raw_text: str, thread_state: dict[str, Any] | None) -> dict[str, Any]:
     """Empaqueta texto y hilo abierto sin semántica.
 
-    Si **open=true**: **mode=continue** y **thread** incluye **intent**, **object**,
-    **last_question**, **pending** y **target** (puede ser null).
+    Si **open=true**: **mode=continue** y **thread** incluye **intent**, **action**,
+    **object**, **last_question**, **pending**, **target** (puede ser null). **recent** será **null**.
+
+    Si **open=false**: **mode=new**, **thread** **null**. Si existe **last_recoverable**
+    válido persistido por Aris (**recoverable:true**), se expone como **recent** (contexto opcional para GPT).
+
+    Para **GPT**: **recent** jamás debe citarse textualmente como tal al usuario final.
     """
     raw = (raw_text or "").strip()
 
@@ -74,17 +79,35 @@ def build_payload(raw_text: str, thread_state: dict[str, Any] | None) -> dict[st
         base["mode"] = "continue"
         base["thread"] = {
             "intent": thread_state.get("intent"),
+            "action": thread_state.get("action"),
             "object": thread_state.get("object"),
             "last_question": thread_state.get("last_question"),
             "pending": thread_state.get("pending"),
             "target": thread_state.get("target"),
         }
+        base["recent"] = None
         base["rules"] = {
             "hide_internal": True,
         }
     else:
         base["mode"] = "new"
         base["thread"] = None
+        lr: dict[str, Any] | None = None
+        if isinstance(thread_state, dict):
+            lr_raw = thread_state.get("last_recoverable")
+            if isinstance(lr_raw, dict) and lr_raw.get("recoverable") is True:
+                lr = {
+                    "recoverable": True,
+                    "intent": lr_raw.get("intent"),
+                    "action": lr_raw.get("action"),
+                    "object": lr_raw.get("object"),
+                    "target": lr_raw.get("target"),
+                    "pending": lr_raw.get("pending"),
+                    "last_question": lr_raw.get("last_question"),
+                    "reason": lr_raw.get("reason"),
+                    "created_at": lr_raw.get("created_at"),
+                }
+        base["recent"] = lr
         base["rules"] = {
             "hide_internal": True,
         }

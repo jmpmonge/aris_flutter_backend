@@ -16,7 +16,9 @@ if str(REPO) not in sys.path:
 
 import backend.core.engine as engine_mod
 from backend.core.engine import ArisMinimalEngine
+from backend.core.payload_builder import build_payload
 from backend.storage.events_store import EventsStore
+from backend.storage.json_store import utc_now_iso
 from backend.storage.notes_store import NotesStore
 from backend.storage.tasks_store import TasksStore
 from backend.storage.thread_state_store import ThreadStateStore
@@ -2801,15 +2803,23 @@ def smoke_23_task_update_basic() -> None:
         engine._tasks.add_task({"title": "persistir prioridad"})
         with patch.object(engine_mod, "ask_gpt", return_value=r_c_m):
             tc, _, _, _ = engine.process_message("x")
-        if "concret" not in (tc or "").lower():
+        if (
+            "concret" not in (tc or "").lower()
+            and "modificar" not in (tc or "").lower()
+        ):
             raise AssertionError(f"smoke23C: {tc!r}")
         if any(
             str(t.get("priority") or "") == "high"
             for t in engine._tasks.list_tasks()
         ):
             raise AssertionError("smoke23C no high")
-        if engine._thread_store.get_state().get("open"):
-            raise AssertionError("smoke23C hilo cerrado")
+        st_cf = engine._thread_store.get_state()
+        if not st_cf.get("open"):
+            raise AssertionError(f"smoke23C debe dejar el hilo abierto: {st_cf!r}")
+        if str(st_cf.get("intent")) != "task":
+            raise AssertionError(f"smoke23C intent task: {st_cf!r}")
+        if (st_cf.get("pending") or {}).get("field") != "missing_target":
+            raise AssertionError(f"smoke23C pending missing_target {st_cf!r}")
 
     # --- CASO D: obj vacío ---
     with tempfile.TemporaryDirectory() as d_d:
@@ -2830,11 +2840,16 @@ def smoke_23_task_update_basic() -> None:
         }
         with patch.object(engine_mod, "ask_gpt", return_value=r_d):
             td, _, _, _ = engine.process_message("z")
-        if "cambiar" not in (td or "").lower():
+        if "qué quieres cambiar" not in (td or "").lower():
             raise AssertionError(f"smoke23D: {td!r}")
         st = engine._tasks.list_tasks()[0]
         if st.get("title") != "sin cambios":
             raise AssertionError("smoke23D título intacto")
+        std = engine._thread_store.get_state()
+        if not std.get("open"):
+            raise AssertionError(f"smoke23D debe dejar el hilo abierto {std!r}")
+        if (std.get("pending") or {}).get("field") != "update_value":
+            raise AssertionError(f"smoke23D pending update_value {std!r}")
 
     # --- CASO E: need_context → ready ---
     r_e1: dict[str, Any] = {
@@ -2972,6 +2987,269 @@ def smoke_23_task_update_basic() -> None:
     print("smoke 23 OK (actualización básica de tareas v0.47.36)")
 
 
+def normalize_target_from_state(st: dict[str, Any]) -> str | None:
+    """Helper smoke: mismo criterio que extract_event_target_id sobre estado persistido."""
+    from backend.core.payload_builder import extract_event_target_id
+
+    shim = {"target": st.get("target"), "pending": st.get("pending")}
+    return extract_event_target_id(shim)
+
+
+def smoke_24_recoverable_task_update_state() -> None:
+    """v0.47.36.1 — hilo incompleto en task/update y payload ``recent``."""
+    r_tpl_empty_patch: dict[str, Any] = {
+        "s": "ready",
+        "i": "task",
+        "a": "update",
+        "obj": {},
+        "target": "",
+        "q": None,
+        "r": None,
+        "pending": None,
+        "ctx": None,
+    }
+
+    # --- CASO A: obj vacío con target válido ---
+    with tempfile.TemporaryDirectory() as d_a:
+        base = Path(d_a)
+        engine = _make_engine(base)
+        tb = engine._tasks.add_task({"title": "llamar al banco"})
+        idb = str(tb["id"])
+        r_a: dict[str, Any] = {
+            "s": "ready",
+            "i": "task",
+            "a": "update",
+            "obj": {},
+            "target": idb,
+            "q": None,
+            "r": None,
+            "pending": None,
+            "ctx": None,
+        }
+        with patch.object(engine_mod, "ask_gpt", return_value=r_a):
+            t1, _, _, _ = engine.process_message("llamar al banco")
+        if "qué quieres cambiar" not in (t1 or "").lower():
+            raise AssertionError(f"smoke24A: {t1!r}")
+        st_a = engine._thread_store.get_state()
+        if not st_a.get("open"):
+            raise AssertionError(f"smoke24A cerrado {st_a!r}")
+        if str(st_a.get("intent")) != "task":
+            raise AssertionError(f"smoke24A intent {st_a!r}")
+        if str(st_a.get("action")) != "update":
+            raise AssertionError(f"smoke24A action {st_a!r}")
+        if normalize_target_from_state(st_a) != idb:
+            raise AssertionError(f"smoke24A target {st_a!r}")
+        pend_a = st_a.get("pending") or {}
+        if pend_a.get("field") != "update_value":
+            raise AssertionError(f"smoke24A pending.field {pend_a!r}")
+
+    # --- CASO B: continuación completa ---
+    r_b_vis = "He actualizado la descripción de la tarea «llamar al banco»."
+    with tempfile.TemporaryDirectory() as d_b:
+        base = Path(d_b)
+        engine = _make_engine(base)
+        tb = engine._tasks.add_task({"title": "llamar al banco"})
+        id_bb = str(tb["id"])
+        r_a2 = dict(r_tpl_empty_patch)
+        r_a2["target"] = id_bb
+        r_bf = {
+            "s": "ready",
+            "i": "task",
+            "a": "update",
+            "obj": {"description": "preguntar por los seguros vinculados"},
+            "target": id_bb,
+            "q": None,
+            "r": r_b_vis,
+            "pending": None,
+            "ctx": None,
+        }
+
+        seq = iter([r_a2, r_bf])
+
+        def fb(_p: dict[str, Any]) -> dict[str, Any] | None:
+            return next(seq)
+
+        with patch.object(engine_mod, "ask_gpt", side_effect=fb):
+            engine.process_message("primer turno vacío obj")
+            t2b, _, _, _ = engine.process_message(
+                "preguntar por los seguros vinculados"
+            )
+        if r_b_vis not in (t2b or ""):
+            raise AssertionError(f"smoke24B resp {t2b!r}")
+        row = engine._tasks.list_tasks()[0]
+        if row.get("description") != "preguntar por los seguros vinculados":
+            raise AssertionError(f"smoke24B desc {row!r}")
+        if engine._notes.list_notes():
+            raise AssertionError("smoke24B sin nota")
+        st_b_end = engine._thread_store.get_state()
+        if st_b_end.get("open"):
+            raise AssertionError("smoke24B hilo debe cerrarse")
+        if st_b_end.get("last_recoverable") is not None:
+            raise AssertionError("smoke24B recoverable limpio")
+
+    # --- CASO C: payload ``recent`` cuando no hay hilo ---
+    blob_template_c = {
+        "recoverable": True,
+        "intent": "task",
+        "action": "update",
+        "target": "",
+        "object": {"requested_field": "description"},
+        "pending": {"field": "description", "original_action": "update"},
+        "last_question": "¿Qué descripción?",
+        "reason": "missing_update_value",
+        "created_at": utc_now_iso(),
+    }
+    with tempfile.TemporaryDirectory() as d_c:
+        base = Path(d_c)
+        engine = _make_engine(base)
+        tbl = engine._tasks.add_task({"title": "llamar al banco"})
+        id_bc = str(tbl["id"])
+        blob_eff = dict(blob_template_c)
+        blob_eff["target"] = id_bc
+        engine._thread_store.save_closed_with_recoverable(blob_eff)
+        pl = build_payload(
+            "tienes que cambiar la tarea", engine._thread_store.get_state()
+        )
+        if pl.get("mode") != "new":
+            raise AssertionError(f"smoke24C mode {pl!r}")
+        if pl.get("thread") is not None:
+            raise AssertionError(f"smoke24C thread {pl!r}")
+        rec = pl.get("recent")
+        if not isinstance(rec, dict) or rec.get("recoverable") is not True:
+            raise AssertionError(f"smoke24C recent {pl!r}")
+        if rec.get("intent") != "task" or rec.get("action") != "update":
+            raise AssertionError(f"smoke24C recent ia {rec!r}")
+        if rec.get("target") != id_bc:
+            raise AssertionError(f"smoke24C target {rec!r}")
+
+    # --- CASO D: ``recent`` omitido si hilo abierto ---
+    lr_d = {
+        "recoverable": True,
+        "intent": "task",
+        "action": "update",
+        "target": "aaaaaaaa-bbbb-4ccc-dddd-eeeeeeeeeeee",
+        "object": {},
+        "pending": {},
+        "last_question": "x",
+        "reason": "test",
+        "created_at": utc_now_iso(),
+    }
+    with tempfile.TemporaryDirectory() as d_d:
+        base = Path(d_d)
+        engine = _make_engine(base)
+        engine._thread_store.save_state({"open": False, "last_recoverable": lr_d})
+        engine._thread_store.save_state(
+            {
+                "open": True,
+                "intent": "task",
+                "action": "complete",
+                "object": {},
+                "last_question": "¿?",
+                "pending": None,
+                "target": None,
+            }
+        )
+        pl_d = build_payload("__d__", engine._thread_store.get_state())
+        if pl_d.get("mode") != "continue":
+            raise AssertionError(f"smoke24D mode {pl_d!r}")
+        if pl_d.get("recent") is not None:
+            raise AssertionError(f"smoke24D recent {pl_d!r}")
+
+    # --- CASOS E + F: selección única sin lista + siguiente turno ejecuta ---
+    q_desc = (
+        "¿Qué descripción quieres ponerle a la tarea «llamar al banco»?"
+    )
+    with tempfile.TemporaryDirectory() as d_ef:
+        base = Path(d_ef)
+        engine = _make_engine(base)
+        engine._tasks.add_task({"title": "comprar leche"})
+        t_bn = engine._tasks.add_task({"title": "llamar al banco"})
+        ib = str(t_bn["id"])
+        r_e1 = {
+            "s": "need_context",
+            "i": "task",
+            "a": "update",
+            "obj": {"requested_field": "description"},
+            "target": None,
+            "q": None,
+            "r": None,
+            "pending": None,
+            "ctx": {
+                "domain": "tasks",
+                "query": "list_tasks",
+                "filters": {"title": "banco"},
+            },
+        }
+        r_e2 = {
+            "s": "ask",
+            "i": "task",
+            "a": "update",
+            "obj": {"requested_field": "description"},
+            "target": ib,
+            "q": q_desc,
+            "r": None,
+            "pending": {
+                "field": "description",
+                "target": ib,
+                "original_action": "update",
+            },
+            "ctx": None,
+        }
+        seq_ef = iter([r_e1, r_e2])
+
+        def fef(_p: dict[str, Any]) -> dict[str, Any] | None:
+            return next(seq_ef)
+
+        with patch.object(engine_mod, "ask_gpt", side_effect=fef):
+            tef1, _, _, _ = engine.process_message(
+                "cambia la descripción de la tarea del banco"
+            )
+        _assert_no_uuid_in_visible(tef1, "smoke24E")
+        low = "comprar leche"
+        if low in (tef1 or "").lower():
+            raise AssertionError(f"smoke24E mención superflua leche {tef1!r}")
+        if tef1.strip() != q_desc:
+            raise AssertionError(f"smoke24E q {tef1!r}")
+        st_ef = engine._thread_store.get_state()
+        if not st_ef.get("open"):
+            raise AssertionError(f"smoke24E abierto {st_ef!r}")
+        if normalize_target_from_state(st_ef) != ib:
+            raise AssertionError("smoke24E target ib")
+        peg = st_ef.get("pending") or {}
+        if peg.get("field") != "description":
+            raise AssertionError(f"smoke24E pend {peg!r}")
+        for rn in engine._notes.list_notes():
+            raise AssertionError(f"smoke24E nota {rn!r}")
+
+        r_f = {
+            "s": "ready",
+            "i": "task",
+            "a": "update",
+            "obj": {"description": "preguntar por seguros"},
+            "target": ib,
+            "q": None,
+            "r": "Listo.",
+            "pending": None,
+            "ctx": None,
+        }
+        with patch.object(engine_mod, "ask_gpt", return_value=r_f):
+            engine.process_message("preguntar por seguros")
+
+        lst = engine._tasks.list_tasks()
+        by_tt = {str(x.get("title")): x for x in lst}
+        if (
+            str(by_tt["llamar al banco"].get("description"))
+            != "preguntar por seguros"
+        ):
+            raise AssertionError("smoke24F banco actualizado")
+        if by_tt["comprar leche"].get("description"):
+            raise AssertionError("smoke24F leche sin tocar desc")
+        if engine._thread_store.get_state().get("open"):
+            raise AssertionError("smoke24F cerrado")
+
+    print("smoke 24 OK (operaciones task/update recuperables v0.47.36.1)")
+
+
 def main() -> int:
     try:
         smoke_1_2_ambiguous_then_continue()
@@ -2994,6 +3272,7 @@ def main() -> int:
         smoke_21_clean_task_card_contract()
         smoke_22_task_delete_safe()
         smoke_23_task_update_basic()
+        smoke_24_recoverable_task_update_state()
     except AssertionError as e:
         print(f"FAIL: {e}", file=sys.stderr)
         return 1

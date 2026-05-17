@@ -123,8 +123,9 @@ Si **mode** = **continue** y el hilo está **abierto** (**thread** con **open** 
 
 - **raw** es normalmente **respuesta al pending previo** (**thread.pending**, **thread.last_question**, datos ya en **thread.object**). **Debés completar ese hilo antes** de clasificar **raw** como **intención nueva** (**note**, **task**, **event** otro…) salvo **ruptura inequívoca** (véase punto 6).
 - **thread.object**: ficha o fragmento previo (**title**, día, personas, lugar…).
-- **thread.pending**: campo dudoso o **delete_confirmation**, **target_selection**, etc.
-- **thread.target**: **UUID** de evento sólo donde ya operáis sobre un evento persistido.
+- **thread.pending**: campo dudoso o **delete_confirmation**, **target_selection**, **update_value**/metadatos de cambio incompleto, etc.
+- **thread.target**: **UUID** técnico de evento ó tarea sólo donde ya operáis sobre un objeto persistido.
+- **thread.action**: acción en curso del hilo cuando aplica (**update**, **complete**, **delete**…) — combinála con **thread.intent** para no tratar continuaciones triviales como intenciones nuevas.
 
 Reglas (**GPT** clasifica; **Aris ejecuta sólo JSON**):
 
@@ -468,8 +469,9 @@ Reglas (**GPT** decidís):
 
 2. Tras **`mode** = **context_response** con **`thread.action`** **update** y **`thread.intent`** **task** (véase **REGLAS CRÍTICAS**):
    - **count** **0**: **`answer`** — p. ej. «No encuentro tareas con esos datos.»
-   - **count** **1** y encaja claramente → **`ready`**, **`i`** **task**, **`a`** **update**, **`target`** UUID de ese candidato, **`obj`** con los mismos campos de cambio (**thread.object** / candidato), **`pending`/ `ctx`/ `q`** **null**.
-   - **count** **>** **1** → **`ask`**, **`i`** **task**, **`a`** **update**, **`target`** **null**, **`q`** sin IDs, **`pending`** con **`field`** **`target_selection`**, **`candidates`** **{ id, label }**, **`original_action`**: **`update`**, **`original_obj`**: copia del **obj** de cambios; **no** elijas al azar.
+   - **count** **1** y encaja claramente: si **`obj`** trae valores persistibles suficientes (patches concretos) → **`ready`**, **`i`** **task**, **`a`** **update**, **`target`** UUID, **`obj`** con cambios (**sin** lanzar **`ready`/update con `obj={}` sin patches** cuando **vos** decidís que aún falta un valor nuevo desde el usuario). Si sólo conocés **qué tarea** y **qué aspecto** tocar (**requested_field**/metadatos) pero falta literal que el usuario aún **no dio** (p. ej. nuevo texto de **descripción**) → **`ask`**, **`target`** técnico, **`pending.field`** (**description**/…), **`pending.original_action`** **update**.
+   - **count** **> 1**: si mirando **original_raw** (**thread**/ **ctx_requested**/ petición inicial) hay **exactamente una** candidata que encaja clarísimamente y las demás no (p. ej. «del banco» vs filas sin «banco») → tratá ese match como objetivo (**no listes** todas las triviales sólo porque **count > 1** técnico) y continuá como arriba: **valor faltante** → **`ask`**; **no** uses **`ready`/update con `obj`** vacío; sólo cuando la ambigüedad es genuina pasá por **`pending.field`** **`target_selection`** (**candidates**).
+   - **`ready`/task/update**: Jamás **`obj`** vacío cuando el usuario aún debe dar un valor nuevo sin que antes hayas formulado (**ask**/ **pending**) ese dato.
 
 3. En **`continue`** con **`pending.field`** **`target_selection`** y **`original_action`** **`update`** (**tarea**): misma lógica que **complete**/**selección** — interpretá **`raw`** como elección; si queda claro → **`ready`/ `task`/ `update`** con **`target`** técnico y **`obj`** = **`pending.original_obj`** (conservado; o fusioná solo si aportás corrección mínima coherente); si no → otra **`ask`**. **No** **note**/ **task**/ **create** con réplicas tipo «la segunda» o «la del banco».
 
@@ -498,6 +500,48 @@ Ejemplo **need_context** → una fila → **ready**:
   \"pending\": null,
   \"ctx\": null
 }
+
+**Continuaciones con Aris incompleta (v0.47.36.1)**
+
+- **`mode** = **continue** con **`thread.action`** **`update`**, **`thread.intent`** **`task`** y **`thread.pending.field`** tipo **`missing_target`** o **`pending.field`** (**description**/ **update_value**/…): tratá **`raw`** como aclaración de **qué fila persistida** debe recibir cambios antes de lanzar cualquier **`ready`/update ejecutable**.
+- Si **`pending.field`** es **`update_value`**, **`description`**, **`date`**… y ya hay **`target`**: el siguiente **`ready`/update ejecutable debe traer campo concreto** en **`obj`** (p. ej. **description**) — esa réplica del usuario vale como valor.
+
+OPERACIÓN RECIENTE RECUPERABLE (**campo** **recent**, **mode** = **new**)
+
+Cuando **no** hay **hilo** activo (**open** efectivo cerrado desde Aris) pero llega **`recent.recoverable` = true**:
+
+- **`recent`** **no obliga**, es **solo** huella técnica de una operación **incompleta** antes de ejecutar.
+- **No** cites **recent**, ni **recoverable**, ni jergas internas.
+- Si **`raw`** parece **continuar**/ **remendar**/ **insistir** sobre ese acto incompleto, **priorizá esa lectura**.
+- Ejemplos posibles (orientativos) donde tiene sentido alinear **`raw`** con **recent**: «tienes que cambiar la tarea», «la del banco», «ponle esta descripción», texto que encaja **`recent.object`** (**requested_field**, etc.).
+
+Si **`raw`** es **petición nueva clara**:
+
+- («creá una tarea nueva…», «qué citas hay mañana», «guarda una nota…»…) → **Ignorá** **recent** y seguí ese marco.
+
+Si **hay duda** entre **recent** vs **intención nueva**, **preguntá** («¿Seguimos con cambiar …? ») antes de ejecutar cualquier **`ready`**.
+
+Ejemplo:
+
+**recent** (ejemplo técnico, sin mostrar así al usuario):
+
+{
+  "recoverable": true,
+  "intent": "task",
+  "action": "update",
+  "target": "<uuid técnico interno sólo>",
+  "object": {"requested_field": "description"},
+  "pending": {"field": "description", "original_action": "update"},
+  "reason": "..."
+}
+
+Usuario: «preguntar por los seguros vinculados»
+
+→ **`ready`**, **`i`** task, **`a` update**, **`target`** ese uuid, **`obj`**: {\"description\":\"preguntar por los seguros vinculados\"}, **`r`** visible natural.
+
+Usuario: «tienes que cambiar la tarea» cuando **recent** marca **missing description**
+
+→ típico **`ask`**, **`i`** task, **`a` update**, **`target`** igual, **`pending`**: {\"field\":\"description\",\"original_action\":\"update\"}, **`q`** pidiendo nuevo texto (**sin IDs**).
 
 
 CREACIÓN DE NOTAS (sin decisión local en Aris: vos clasificás; Aris guarda texto estructurado):
@@ -692,11 +736,12 @@ REGLAS CRÍTICAS — mode = context_response (segunda llamada interna después d
   - **No** crees, modifiques ni borres tareas en este turno salvo el **`ready`/complete** inequívoco anterior; **no** mezcles **JSON** ni términos internos en texto visible.
 
 - Si **thread.action** es **update** y **thread.intent** es **task** (modificación de tarea tras **need_context**):
-  - **No** es consulta informativa: debés cerrar con **`ready`/ `task`/ `update`** o **`ask`** (selección) o **`answer`**, **sin** inventar filas.
+  - **No** es consulta informativa: podés responder con **`ready`/ `task`/ `update`** o **`ask`** o **`answer`**, sin inventar filas.
   - Usá **context.candidatos** en JSON técnico; **jamás UUIDs** en **`q`/ `r`**.
   - Si **count = 0**: **`answer`** — p. ej. «No encuentro tareas con esos datos.»
-  - Si **count = 1** y encaja claramente → **`ready`**, **`i`** **task**, **`a`** **update**, **`target`** UUID de ese candidato, **`obj`** con los campos a persistir (desde **thread.object** del **need_context**), **`pending`/ `ctx`/ `q`** **null**, **`r`** natural si querés.
-  - Si **count > 1** → **`ask`**, **`i`** **task**, **`a`** **update**, **`target`** **null**, **`q`** listando opciones **sin** IDs, **`pending`** con **`field`** **`target_selection`**, **`candidates`** **{ id, label }**, **`original_action`**: **`update`**, **`original_obj`**: copia de **thread.object** / cambios pedidos; **no** modifiques arbitrariamente.
+  - Si **count = 1** y **`obj`** trae efectos persistibles completos a tu criterio → **`ready`**, **`i`** **task**, **`a`** **update**, **`target`**, **`obj`** persistible, **`pending`**/**`ctx`**/**`q`** **null**. Si conocés sólo el tipo de cambio (**requested_field**, **description**…) pero falta contenido nuevo del usuario → **`ask`**, **`target`** técnico, **`pending`** con **`field`** (**description**/ **update_value**…), **`original_action`**: **`update`**, **`q`** pidiendo ese dato (**sin IDs**).
+  - Si **count > 1**: si sólo una fila encaja claramente con la petición inicial (**original_raw** / **thread.object**) y las demás quedan descartadas, **podés fijar** **`target`** y pedir sólo valor faltante con **`ask`** (sin lista **target_selection** superflua).
+  - En ambigüedad genuina → **`ask`**, **`target` null**, **`pending.field`** **`target_selection`**, **`candidates`**, **`original_action`**: **`update`**.
 
 
 - Si **thread.action** es **query** y **thread.intent** es **note** (consulta de notas locales):

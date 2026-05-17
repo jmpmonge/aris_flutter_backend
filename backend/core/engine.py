@@ -12,10 +12,12 @@ from backend.core.payload_builder import (
     build_payload,
     extract_event_target_id,
     normalize_gpt_response,
+    normalize_target_id,
     sanitize_visible_text,
 )
 from backend.storage.events_store import EventsStore
 from backend.storage.notes_store import NotesStore
+from backend.storage.json_store import utc_now_iso
 from backend.storage.tasks_store import TasksStore
 from backend.storage.thread_state_store import ThreadStateStore
 
@@ -117,6 +119,7 @@ class ArisMinimalEngine:
                 {
                     "open": True,
                     "intent": primera["i"],
+                    "action": primera.get("a"),
                     "object": primera["obj"],
                     "last_question": _MSG_NEED_MORE_CTX,
                     "pending": {
@@ -125,6 +128,7 @@ class ArisMinimalEngine:
                         "contexto_encontrado": contexto_encontrado,
                         "peticion_original": (peticion_original or "").strip(),
                     },
+                    "target": extract_event_target_id(primera),
                 }
             )
             return (_MSG_NEED_MORE_CTX, "ambiguo", None, None)
@@ -163,6 +167,7 @@ class ArisMinimalEngine:
                 {
                     "open": True,
                     "intent": result["i"],
+                    "action": result.get("a"),
                     "object": obj_out,
                     "last_question": result["q"],
                     "pending": result["pending"],
@@ -174,13 +179,17 @@ class ArisMinimalEngine:
             return (reply or "¿Puedes concretar?", "ambiguo", None, None)
 
         if s == "answer":
-            self._thread_store.clear_state()
+            st0 = self._thread_store.get_state()
+            if not self._maybe_stash_open_task_as_recoverable(st0):
+                self._thread_store.clear_state()
             r = result["r"]
             reply = sanitize_visible_text(r) if isinstance(r, str) else ""
             return (reply or _MSG_OK, "consulta", None, None)
 
         if s == "fail":
-            self._thread_store.clear_state()
+            st0 = self._thread_store.get_state()
+            if not self._maybe_stash_open_task_as_recoverable(st0):
+                self._thread_store.clear_state()
             r = result["r"]
             reply = sanitize_visible_text(r) if isinstance(r, str) else ""
             return (reply or _MSG_FAIL_FALLBACK, "consulta", None, None)
@@ -387,6 +396,117 @@ class ArisMinimalEngine:
             None,
         )
 
+    @staticmethod
+    def _requested_field_meta_task(obj: dict[str, Any]) -> str | None:
+        """Claves sólo-estructura que GPT puede enviar (**no** implican parche persistido solo)."""
+        for key in ("requested_field", "_field_requested"):
+            if key not in obj:
+                continue
+            rv = obj.get(key)
+            if rv is None:
+                continue
+            s = str(rv).strip().lower()
+            return s if s else None
+        return None
+
+    @staticmethod
+    def _followup_pending_field_task_update(requested: str | None) -> str:
+        allowed = frozenset(
+            {"description", "date", "time", "title", "tags", "date_text", "time_text"}
+        )
+        if requested in allowed:
+            if requested == "date_text":
+                return "date"
+            if requested == "time_text":
+                return "time"
+            return requested
+        return "update_value"
+
+    def _prompt_task_missing_value(self, pend_field: str, title_hint: str | None) -> str:
+        ttl = (title_hint or "").strip()
+        noun = (
+            f"la tarea «{ttl}»" if ttl else "esa tarea"
+        )
+        if pend_field == "description":
+            return f"¿Qué descripción quieres ponerle a {noun}?"
+        if pend_field in ("date", "date_text"):
+            return f"¿Para qué día quieres cambiar {noun}?"
+        if pend_field in ("time", "time_text"):
+            return f"¿A qué hora quieres cambiar {noun}?"
+        if pend_field == "title":
+            return f"¿Qué nuevo título quieres ponerle a {noun}?"
+        if pend_field == "tags":
+            return f"¿Qué etiquetas quieres ponerle a {noun}?"
+        return "¿Qué quieres cambiar de esa tarea?"
+
+    def _recoverable_blob_task_update(
+        self,
+        *,
+        tid: str | None,
+        obj: dict[str, Any],
+        pending: dict[str, Any],
+        last_q: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        return {
+            "recoverable": True,
+            "intent": "task",
+            "action": "update",
+            "target": tid,
+            "object": dict(obj),
+            "pending": dict(pending),
+            "last_question": last_q,
+            "reason": reason,
+            "created_at": utc_now_iso(),
+        }
+
+    def _should_track_open_task_as_recoverable(self, st: dict[str, Any]) -> bool:
+        if not isinstance(st, dict):
+            return False
+        if not st.get("open"):
+            return False
+        if str(st.get("intent") or "").strip().lower() != "task":
+            return False
+        act = str(st.get("action") or "").strip().lower()
+        pend = st.get("pending") if isinstance(st.get("pending"), dict) else {}
+        oo = pend.get("original_action")
+        pf = pend.get("field")
+        pend_o = (
+            isinstance(oo, str) and str(oo).strip().lower() == "update"
+        )
+        pend_flds = pend_o or (
+            isinstance(pf, str)
+            and str(pf).strip().lower()
+            in {
+                "update_value",
+                "description",
+                "title",
+                "date",
+                "time",
+                "tags",
+                "missing_target",
+            }
+        )
+        return act == "update" or pend_o or pend_flds
+
+    def _maybe_stash_open_task_as_recoverable(self, st: dict[str, Any]) -> bool:
+        """Cierra guardando recoverable sólo ante **answer**/**fail** si había actualización incompleta."""
+        if self._should_track_open_task_as_recoverable(st):
+            blob = self._recoverable_blob_task_update(
+                tid=normalize_target_id(st.get("target")),
+                obj=dict(st["object"]) if isinstance(st.get("object"), dict) else {},
+                pending=(
+                    dict(st["pending"])
+                    if isinstance(st.get("pending"), dict)
+                    else {}
+                ),
+                last_q=str(st.get("last_question") or "").strip(),
+                reason="interaction_closed_without_execute",
+            )
+            self._thread_store.save_closed_with_recoverable(blob)
+            return True
+        return False
+
     def _handle_ready_update_task(
         self, result: dict[str, Any]
     ) -> tuple[str, str, dict[str, Any] | None, str | None]:
@@ -401,48 +521,135 @@ class ArisMinimalEngine:
 
         obj_raw = result.get("obj")
         obj: dict[str, Any] = obj_raw if isinstance(obj_raw, dict) else {}
-
         tid = extract_event_target_id(result)
+        meta_req = ArisMinimalEngine._requested_field_meta_task(obj)
+        updates_eff = self._task_updates_from_obj(obj)
+        hinted = meta_req or any(
+            k in obj for k in ("requested_field", "_field_requested")
+        )
+
+        # --- Falta target: mantén hilo operativo ---
         if not tid:
-            self._thread_store.clear_state()
-            return (
-                "No sé qué tarea quieres modificar. ¿Puedes concretarla?",
-                "consulta",
-                None,
-                None,
+            if updates_eff or hinted:
+                msg = (
+                    "No sé qué tarea quieres modificar. ¿Puedes concretarla?"
+                )
+                pend: dict[str, Any] = {
+                    "field": "missing_target",
+                    "original_action": "update",
+                }
+                self._thread_store.save_state(
+                    {
+                        "open": True,
+                        "intent": "task",
+                        "action": "update",
+                        "object": dict(obj),
+                        "last_question": msg,
+                        "pending": pend,
+                        "target": None,
+                    }
+                )
+                return (msg, "ambiguo", None, None)
+
+            blob = self._recoverable_blob_task_update(
+                tid=None,
+                obj=dict(obj),
+                pending={
+                    "field": "missing_target",
+                    "original_action": "update",
+                },
+                last_q=(
+                    "No sé qué tarea quieres modificar ni qué quieres cambiar. "
+                    "¿Puedes concretarlo?"
+                ),
+                reason="missing_target_and_updates",
             )
+            self._thread_store.save_closed_with_recoverable(blob)
+            reply = sanitize_visible_text(blob["last_question"])
+            return (reply, "consulta", None, None)
 
         cur = next(
             (t for t in self._tasks.list_tasks() if str(t.get("id")) == tid),
             None,
         )
         if cur is None:
-            self._thread_store.clear_state()
+            blob_nf = self._recoverable_blob_task_update(
+                tid=tid,
+                obj=dict(obj),
+                pending={
+                    "field": "missing_target",
+                    "target": tid,
+                    "original_action": "update",
+                },
+                last_q=(
+                    "No encuentro esa tarea en tu lista."
+                ),
+                reason="task_not_found",
+            )
+            self._thread_store.save_closed_with_recoverable(blob_nf)
             return (
-                "No encuentro esa tarea en tu lista.",
+                sanitize_visible_text(blob_nf["last_question"]),
                 "consulta",
                 None,
                 None,
             )
 
-        updates = self._task_updates_from_obj(obj)
-        if not updates:
-            self._thread_store.clear_state()
-            return (
-                "No veo qué quieres cambiar de la tarea.",
-                "consulta",
-                None,
-                None,
+        # --- Obj vacío o sin patch persistible: esperar valor (hilo abierto) ---
+        if not updates_eff:
+            pfield = ArisMinimalEngine._followup_pending_field_task_update(meta_req)
+            title_hint = str(cur.get("title") or "").strip() or None
+            prompt = self._prompt_task_missing_value(pfield, title_hint)
+            pend_w: dict[str, Any] = {
+                "field": pfield,
+                "target": tid,
+                "original_action": "update",
+            }
+            preserved = dict(obj)
+            self._thread_store.save_state(
+                {
+                    "open": True,
+                    "intent": "task",
+                    "action": "update",
+                    "object": preserved,
+                    "last_question": prompt,
+                    "pending": pend_w,
+                    "target": tid,
+                }
             )
+            return (prompt, "ambiguo", None, None)
 
         try:
-            updated = self._tasks.update_task(tid, updates)
+            updated = self._tasks.update_task(tid, updates_eff)
         except ValueError:
-            self._thread_store.clear_state()
+            blob_err = self._recoverable_blob_task_update(
+                tid=tid,
+                obj=dict(obj),
+                pending={
+                    "field": "update_value",
+                    "target": tid,
+                    "original_action": "update",
+                },
+                last_q=(
+                    "No he podido actualizar esa tarea."
+                ),
+                reason="value_error",
+            )
+            self._thread_store.save_closed_with_recoverable(blob_err)
             return ("No he podido actualizar esa tarea.", "consulta", None, None)
 
         if updated is None:
-            self._thread_store.clear_state()
+            blob_err = self._recoverable_blob_task_update(
+                tid=tid,
+                obj=dict(obj),
+                pending={
+                    "field": "update_value",
+                    "target": tid,
+                    "original_action": "update",
+                },
+                last_q="No he podido actualizar esa tarea.",
+                reason="store_update_failed",
+            )
+            self._thread_store.save_closed_with_recoverable(blob_err)
             return ("No he podido actualizar esa tarea.", "consulta", None, None)
 
         self._thread_store.clear_state()
