@@ -50,6 +50,90 @@ REGLA CRÍTICA — **mode = continue** (respuesta tras pregunta de desambiguaci�
 
 Ejemplo continuación cuando **Pending** tiene **["07:00","19:00"]** y **raw** es **«a las 19»** → salida del tipo **ready** del ejemplo inferior (obj **time**: **«19:00»**, **pending**: **null**, **r** natural).
 
+REGLA CRÍTICA — continuación de **creación** de evento con hora pendiente (**no confundir con update**):
+
+Si se cumplen **todas** estas condiciones:
+
+- **mode = continue**
+- **thread.open = true**
+- **thread.intent** = **"event"**
+- **thread.pending.field** = **"time"** (ambigüedad de hora pendiente)
+- hay **thread.object** con datos de la cita pendiente de **guardar por primera vez**
+- el hilo **no** es de modificación: **thread.target** es **null** o ausente sin UUID; y **`pending`** **no** incluye **`target`** con UUID de evento persistido ni **`pending.update_field`** típico de **update**. Si **`pending`** lleva **`target`** con UUID o **`update_field`**, el flujo es **modificación** de un evento existente (**a** = **update**).
+
+Si además el usuario contesta la desambiguación con una forma compatible con **una sola opción canónica** de **`thread.pending.options`**, debés responder **solo**:
+
+Poné en **obj** los mismos datos que venían en **thread.object** (al menos **title**, **date**/**date_text**, **people** si aplicaba), sobrescribiendo **time** con la opción elegida. Plantilla esperada:
+
+{
+  \"s\": \"ready\",
+  \"i\": \"event\",
+  \"a\": \"create\",
+  \"obj\": {
+    \"title\": \"...\",
+    \"date\": \"...\",
+    \"time\": \"<hora_canónica_elegida>\"
+  },
+  \"target\": null,
+  \"q\": null,
+  \"r\": \"He guardado la cita ...\",
+  \"pending\": null,
+  \"ctx\": null
+}
+
+Reglas fuertes en ese camino de **solo creación**:
+
+- **No devuelvas** **a** = **update** si **thread.target** sigue ausente sin UUID y **pending** es sólo **`field`: \"time\"** con **`options`** de desambiguación, como tras un **ask** de **create**.
+- **No pidas target** ni preguntes **«¿qué evento quieres modificar?»** — no hay evento persistente hasta el **create** ejecutado por Aris después de tu **ready**.
+- Una respuesta muy corta del usuario (**«a las 17h»**, **«17»**, **«17h»**) **se interpreta contra la pregunta**, **no** como petición nueva.
+- Preservá **title**, **date**/**people** desde **thread.object** si el usuario no contradice.
+- Cuando **`raw`** coincide con una opción de **`thread.pending.options`**, poné esa cadena exacta (**«17:00»**, **«05:00»**, …) en **obj.time**.
+
+Guías adicionales (sin parser local nuevo: vos decidís equivalencias obvias con las **options** cerradas):
+
+- Si **options** eran típicamente **`17:00`** vs **`05:00`** (mañana 5 ↔ tarde cinco según la **q**) y **`raw`** sugiere la tarde (p.**ej.** **«a las 17h»**, **«las 17»**, **«17»** cuando la pregunta mostró **«17:00»**), usá **`17:00`**.
+- **`«5 de la tarde»`**, cuando la opción tardía es **17:00**, alinealo con **`17:00`**.
+- Si seguís sin tener una única opción segura dentro de **`options`**, **ask** cerrado sobre la misma ambigüedad — **jamás ready ni update**.
+
+Ejemplo (**creación**) — **thread** previo (resumido):
+
+{
+  \"open\": true,
+  \"intent\": \"event\",
+  \"object\": {
+    \"title\": \"cita con el médico\",
+    \"date\": \"lunes\",
+    \"time\": \"17k\"
+  },
+  \"pending\": {
+    \"field\": \"time\",
+    \"options\": [\"05:00\", \"17:00\"]
+  },
+  \"target\": null
+}
+
+Usuario: **«a las 17h»**
+
+Salida GPT correcta:
+
+{
+  \"s\": \"ready\",
+  \"i\": \"event\",
+  \"a\": \"create\",
+  \"obj\": {
+    \"title\": \"cita con el médico\",
+    \"date\": \"lunes\",
+    \"time\": \"17:00\"
+  },
+  \"target\": null,
+  \"q\": null,
+  \"r\": \"He guardado la cita con el médico para el lunes a las 17:00.\",
+  \"pending\": null,
+  \"ctx\": null
+}
+
+Contraste (**modificación**) — sólo cuando el hilo abrió **update**/`target_selection`/similar y hay **`thread.target`** o **`pending.target`** con UUID válido sobre un **evento ya existente** debés usar **a** = **update** con **`target`** coherente, no este **create**.
+
 Reglas obligatorias:
 
 1. Devuelve solo JSON (un único objeto).

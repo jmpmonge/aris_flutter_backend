@@ -1029,6 +1029,106 @@ def smoke_12_note_query_basic() -> None:
     print("smoke 12 OK (consulta de notas básica)")
 
 
+def smoke_13_event_create_continue_not_update() -> None:
+    """v0.47.22: crear evento tras ask hora ambigua — debe ser ready/create, no update."""
+    r1: dict[str, Any] = {
+        "s": "ask",
+        "i": "event",
+        "a": "create",
+        "obj": {
+            "title": "cita con el médico",
+            "date": "lunes",
+            "time": "17k",
+        },
+        "target": None,
+        "q": "¿Te refieres a las 17:00 o a las 5:00?",
+        "r": None,
+        "pending": {
+            "field": "time",
+            "options": ["17:00", "05:00"],
+        },
+        "ctx": None,
+    }
+    r2: dict[str, Any] = {
+        "s": "ready",
+        "i": "event",
+        "a": "create",
+        "obj": {
+            "title": "cita con el médico",
+            "date": "lunes",
+            "time": "17:00",
+        },
+        "target": None,
+        "q": None,
+        "r": (
+            "He guardado la cita con el médico para el lunes "
+            "a las 17:00."
+        ),
+        "pending": None,
+        "ctx": None,
+    }
+
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        engine = _make_engine(base)
+        seq = iter([r1, r2])
+
+        def fak(_payload: dict[str, Any]) -> dict[str, Any] | None:
+            return next(seq)
+
+        with patch.object(engine_mod, "ask_gpt", side_effect=fak):
+            t1, _, _, _ = engine.process_message(
+                "cita con el medico el lunes a las 17k"
+            )
+
+        mock_q = (r1.get("q") or "").strip()
+        if (t1 or "").strip() != mock_q:
+            raise AssertionError(f"smoke13A visible debe coincidir con q mock: {t1!r}")
+
+        if engine._events.list_events():
+            raise AssertionError("smoke13A evento antes de tiempo")
+
+        st1 = engine._thread_store.get_state()
+        if not st1.get("open"):
+            raise AssertionError(f"smoke13A thread debía estar abierto: {st1!r}")
+        if st1.get("intent") != "event":
+            raise AssertionError(f"smoke13A intent debía event: {st1!r}")
+        pend = st1.get("pending") or {}
+        if pend.get("field") != "time":
+            raise AssertionError(f"smoke13A pending.field time: {pend!r}")
+        if pend.get("options") != ["17:00", "05:00"]:
+            raise AssertionError(f"smoke13A pending.options: {pend!r}")
+        if st1.get("target"):
+            raise AssertionError(f"smoke13A target debía absent/null: {st1!r}")
+
+        with patch.object(engine_mod, "ask_gpt", side_effect=lambda _p: r2):
+            t2, _, _, _ = engine.process_message("a las 17h")
+
+        msg_mod = (
+            "no sé qué evento quieres modificar"
+        ).lower()
+        if msg_mod in (t2 or "").lower():
+            raise AssertionError(f"smoke13B no debe sonar a update: {t2!r}")
+
+        evs = engine._events.list_events()
+        if len(evs) != 1:
+            raise AssertionError(f"smoke13B un evento: {evs!r}")
+        ev = evs[0]
+        if str(ev.get("title")) != "cita con el médico":
+            raise AssertionError(f"smoke13B title {ev.get('title')!r}")
+        if str(ev.get("date_text")) != "lunes":
+            raise AssertionError(f"smoke13B date_text {ev.get('date_text')!r}")
+        if str(ev.get("time_text")) != "17:00":
+            raise AssertionError(f"smoke13B time_text {ev.get('time_text')!r}")
+        if engine._tasks.list_tasks() or engine._notes.list_notes():
+            raise AssertionError("smoke13B sin tarea ni nota")
+        st2 = engine._thread_store.get_state()
+        if st2.get("open"):
+            raise AssertionError("smoke13B thread debía cerrarse")
+
+    print("smoke 13 OK (creación evento continúa como create tras hora pendiente)")
+
+
 def main() -> int:
     try:
         smoke_1_2_ambiguous_then_continue()
@@ -1040,6 +1140,7 @@ def main() -> int:
         smoke_10_note_create_basic()
         smoke_11_task_query_basic()
         smoke_12_note_query_basic()
+        smoke_13_event_create_continue_not_update()
     except AssertionError as e:
         print(f"FAIL: {e}", file=sys.stderr)
         return 1
