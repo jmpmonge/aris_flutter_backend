@@ -690,6 +690,8 @@ class ArisMinimalEngine:
                 return self._handle_ready_update_event(result)
             if i == "task":
                 return self._handle_ready_update_task(result)
+            if i == "note":
+                return self._handle_ready_update_note(result)
             self._thread_store.clear_state()
             return (_MSG_UNSUPPORTED_MODIFY, "consulta", None, None)
 
@@ -1674,3 +1676,115 @@ class ArisMinimalEngine:
 
         out: dict[str, Any] = {"title": title or None, "content": content, "tags": tags}
         return out
+
+    @staticmethod
+    def _note_updates_from_obj(obj: dict[str, Any]) -> dict[str, Any]:
+        """Campos admitidos por notes_store.update_note; omite vacíos/no admitidos."""
+        if not isinstance(obj, dict):
+            return {}
+        out: dict[str, Any] = {}
+
+        # title — prefixed o alias
+        title_raw = obj.get("note_title") if "note_title" in obj else obj.get("title")
+        if title_raw is not None:
+            s = str(title_raw).strip()
+            if s:
+                out["title"] = s
+
+        # content — prefixed o alias
+        content_raw = (
+            obj.get("note_content") if "note_content" in obj else obj.get("content")
+        )
+        if content_raw is not None:
+            s = str(content_raw).strip()
+            if s:
+                out["content"] = s
+
+        # tags — prefixed o alias
+        tags_raw = obj.get("note_tags") if "note_tags" in obj else obj.get("tags")
+        if tags_raw is not None:
+            if isinstance(tags_raw, list):
+                out["tags"] = [str(t).strip() for t in tags_raw if str(t).strip()]
+            else:
+                out["tags"] = []
+
+        return out
+
+    def _handle_ready_update_note(
+        self, result: dict[str, Any]
+    ) -> tuple[str, str, dict[str, Any] | None, str | None]:
+        r_raw = result.get("r")
+
+        def _reply_saved(default: str) -> str:
+            if isinstance(r_raw, str):
+                cleaned = sanitize_visible_text(r_raw)
+                if cleaned:
+                    return cleaned
+            return default
+
+        obj_raw = result.get("obj")
+        obj: dict[str, Any] = obj_raw if isinstance(obj_raw, dict) else {}
+        tid = extract_event_target_id(result)
+        updates = self._note_updates_from_obj(obj)
+
+        if not tid:
+            msg = "No sé qué nota quieres modificar. ¿Puedes concretarla?"
+            self._thread_store.save_state(
+                {
+                    "open": True,
+                    "intent": "note",
+                    "action": "update",
+                    "object": dict(obj),
+                    "last_question": msg,
+                    "pending": {
+                        "field": "missing_target",
+                        "original_action": "update",
+                    },
+                    "target": None,
+                }
+            )
+            return (msg, "ambiguo", None, None)
+
+        found = next(
+            (n for n in self._notes.list_notes() if str(n.get("id")) == tid),
+            None,
+        )
+        if found is None:
+            self._thread_store.clear_state()
+            return ("No encuentro esa nota en tu lista.", "consulta", None, None)
+
+        if not updates:
+            msg_ask = "¿Qué quieres cambiar de esa nota?"
+            self._thread_store.save_state(
+                {
+                    "open": True,
+                    "intent": "note",
+                    "action": "update",
+                    "object": dict(obj),
+                    "last_question": msg_ask,
+                    "pending": {
+                        "field": "note_update_value",
+                        "target": tid,
+                        "original_action": "update",
+                    },
+                    "target": tid,
+                }
+            )
+            return (msg_ask, "ambiguo", None, None)
+
+        try:
+            updated = self._notes.update_note(tid, updates)
+        except (ValueError, Exception):
+            updated = None
+
+        if updated is None:
+            self._thread_store.clear_state()
+            return ("No he podido modificar esa nota.", "consulta", None, None)
+
+        self._record_successful_mutation(
+            domain="note",
+            action="update",
+            row=updated,
+            changed_fields=dict(updates),
+        )
+        return (_reply_saved("He actualizado la nota."), "nota", updated, None)

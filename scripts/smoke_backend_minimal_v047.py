@@ -5278,6 +5278,255 @@ def smoke_34_robust_raw_reading_contract() -> None:
     print("smoke 34 OK (lectura robusta del raw v0.47.36.11)")
 
 
+def smoke_35_note_update_basic() -> None:
+    """v0.47.37 — modificación básica de notas."""
+
+    # ── CASO A ── update directo con target ───────────────────────────────────────────
+    with tempfile.TemporaryDirectory() as d_a:
+        base = Path(d_a)
+        eng_a = _make_engine(base)
+        note_a = eng_a._notes.add_note(
+            {"title": "Aris", "content": "Contrato antiguo", "tags": ["Aris"]}
+        )
+        nid_a = str(note_a["id"])
+
+        r_a: dict[str, Any] = {
+            "s": "ready",
+            "i": "note",
+            "a": "update",
+            "target": nid_a,
+            "obj": {
+                "note_content": "Contrato prefijado por dominio.",
+                "note_tags": ["Aris", "Contrato"],
+            },
+            "q": None,
+            "r": "He actualizado la nota «Aris».",
+            "pending": None,
+            "ctx": None,
+        }
+
+        with patch.object(engine_mod, "ask_gpt", return_value=r_a):
+            va, _, ua, _ = eng_a.process_message("actualiza la nota de Aris")
+
+        if ua is None:
+            raise AssertionError("smoke35A debe devolver nota actualizada")
+        if str(ua.get("content")) != "Contrato prefijado por dominio.":
+            raise AssertionError(f"smoke35A content {ua!r}")
+        if ua.get("tags") != ["Aris", "Contrato"]:
+            raise AssertionError(f"smoke35A tags {ua!r}")
+        st_a = eng_a._thread_store.get_state()
+        if st_a.get("open"):
+            raise AssertionError(f"smoke35A hilo cerrado {st_a!r}")
+        if (st_a.get("last_focus") or {}).get("domain") != "note":
+            raise AssertionError(f"smoke35A last_focus.domain note {st_a!r}")
+        if (st_a.get("last_action") or {}).get("domain") != "note":
+            raise AssertionError(f"smoke35A last_action.domain note {st_a!r}")
+        if (st_a.get("last_action") or {}).get("action") != "update":
+            raise AssertionError(f"smoke35A last_action.action update {st_a!r}")
+
+    # ── CASO B ── target inexistente ───────────────────────────────────────────────────
+    with tempfile.TemporaryDirectory() as d_b:
+        base = Path(d_b)
+        eng_b = _make_engine(base)
+
+        r_b: dict[str, Any] = {
+            "s": "ready",
+            "i": "note",
+            "a": "update",
+            "target": "missing-note-id",
+            "obj": {"note_content": "Nuevo contenido"},
+            "q": None,
+            "r": "He actualizado la nota.",
+            "pending": None,
+            "ctx": None,
+        }
+
+        with patch.object(engine_mod, "ask_gpt", return_value=r_b):
+            vb, _, ub, _ = eng_b.process_message("modifica la nota inexistente")
+
+        if ub is not None:
+            raise AssertionError(f"smoke35B no debe devolver nota {ub!r}")
+        if eng_b._notes.list_notes():
+            raise AssertionError("smoke35B no debe haber notas")
+        vb_lc = (vb or "").lower()
+        if "no encuentro" not in vb_lc:
+            raise AssertionError(f"smoke35B mensaje no encontrado {vb!r}")
+        st_b = eng_b._thread_store.get_state()
+        if (st_b.get("last_action") or {}).get("action") == "update":
+            raise AssertionError(f"smoke35B last_action no cambia {st_b!r}")
+
+    # ── CASO C ── target válido pero obj vacío → pregunta qué cambiar ─────────────────
+    with tempfile.TemporaryDirectory() as d_c:
+        base = Path(d_c)
+        eng_c = _make_engine(base)
+        note_c = eng_c._notes.add_note({"title": "Aris", "content": "Contenido original"})
+        nid_c = str(note_c["id"])
+
+        r_c: dict[str, Any] = {
+            "s": "ready",
+            "i": "note",
+            "a": "update",
+            "target": nid_c,
+            "obj": {},
+            "q": None,
+            "r": "He actualizado la nota.",
+            "pending": None,
+            "ctx": None,
+        }
+
+        with patch.object(engine_mod, "ask_gpt", return_value=r_c):
+            vc, _, uc, _ = eng_c.process_message("modifica la nota de Aris")
+
+        if uc is not None:
+            raise AssertionError(f"smoke35C no debe modificar {uc!r}")
+        vc_lc = (vc or "").lower()
+        if "qué quieres cambiar" not in vc_lc:
+            raise AssertionError(f"smoke35C pregunta qué cambiar {vc!r}")
+        st_c = eng_c._thread_store.get_state()
+        if not st_c.get("open"):
+            raise AssertionError(f"smoke35C hilo abierto {st_c!r}")
+        if (st_c.get("pending") or {}).get("field") != "note_update_value":
+            raise AssertionError(f"smoke35C pending.field {st_c!r}")
+        if str((st_c.get("pending") or {}).get("target")) != nid_c:
+            raise AssertionError(f"smoke35C pending.target {st_c!r}")
+        # nota no modificada
+        nota_orig = next(n for n in eng_c._notes.list_notes() if str(n["id"]) == nid_c)
+        if nota_orig.get("content") != "Contenido original":
+            raise AssertionError(f"smoke35C contenido intacto {nota_orig!r}")
+
+    # ── CASO D ── continuación note_update_value ──────────────────────────────────────
+    with tempfile.TemporaryDirectory() as d_d:
+        base = Path(d_d)
+        eng_d = _make_engine(base)
+        note_d = eng_d._notes.add_note({"title": "Aris", "content": "Contenido original"})
+        nid_d = str(note_d["id"])
+
+        r_d_block: dict[str, Any] = {
+            "s": "ready",
+            "i": "note",
+            "a": "update",
+            "target": nid_d,
+            "obj": {},
+            "q": None,
+            "r": None,
+            "pending": None,
+            "ctx": None,
+        }
+        r_d_fill: dict[str, Any] = {
+            "s": "ready",
+            "i": "note",
+            "a": "update",
+            "target": nid_d,
+            "obj": {"note_content": "Contenido añadido por continuación."},
+            "q": None,
+            "r": "He actualizado la nota.",
+            "pending": None,
+            "ctx": None,
+        }
+
+        seq_d = iter([r_d_block, r_d_fill])
+
+        def fseq_d(_p: dict[str, Any]) -> dict[str, Any] | None:
+            return next(seq_d)
+
+        with patch.object(engine_mod, "ask_gpt", side_effect=fseq_d):
+            eng_d.process_message("modifica la nota de Aris")
+            vd, _, ud, _ = eng_d.process_message("añade que usa prefijos por dominio")
+
+        if ud is None:
+            raise AssertionError("smoke35D debe actualizar nota")
+        if str(ud.get("content")) != "Contenido añadido por continuación.":
+            raise AssertionError(f"smoke35D content {ud!r}")
+        if eng_d._thread_store.get_state().get("open"):
+            raise AssertionError("smoke35D hilo cerrado")
+        if (eng_d._thread_store.get_state().get("last_action") or {}).get("action") != "update":
+            raise AssertionError("smoke35D last_action update")
+
+    # ── CASO E ── need_context note/update con una candidata ─────────────────────────
+    with tempfile.TemporaryDirectory() as d_e:
+        base = Path(d_e)
+        eng_e = _make_engine(base)
+        note_e = eng_e._notes.add_note({"title": "Aris", "content": "Contenido original"})
+        nid_e = str(note_e["id"])
+
+        r_e_ctx: dict[str, Any] = {
+            "s": "need_context",
+            "i": "note",
+            "a": "update",
+            "obj": {"note_content": "Nuevo contenido"},
+            "target": None,
+            "q": None,
+            "r": None,
+            "pending": None,
+            "ctx": {
+                "domain": "notes",
+                "query": "list_notes",
+                "filters": {"text": "Aris"},
+            },
+        }
+        r_e_ready: dict[str, Any] = {
+            "s": "ready",
+            "i": "note",
+            "a": "update",
+            "target": nid_e,
+            "obj": {"note_content": "Nuevo contenido"},
+            "q": None,
+            "r": "He actualizado la nota de Aris.",
+            "pending": None,
+            "ctx": None,
+        }
+
+        seq_e = iter([r_e_ctx, r_e_ready])
+
+        def fseq_e(_p: dict[str, Any]) -> dict[str, Any] | None:
+            return next(seq_e)
+
+        with patch.object(engine_mod, "ask_gpt", side_effect=fseq_e):
+            ve, _, ue, _ = eng_e.process_message("modifica la nota de Aris con nuevo contenido")
+
+        if ue is None:
+            raise AssertionError("smoke35E debe actualizar nota")
+        if str(ue.get("content")) != "Nuevo contenido":
+            raise AssertionError(f"smoke35E content {ue!r}")
+
+    # ── CASO F ── varias candidatas → target_selection ────────────────────────────────
+    with tempfile.TemporaryDirectory() as d_f:
+        base = Path(d_f)
+        eng_f = _make_engine(base)
+        eng_f._notes.add_note({"title": "Aris v1", "content": "Primera nota"})
+        eng_f._notes.add_note({"title": "Aris v2", "content": "Segunda nota"})
+
+        r_f: dict[str, Any] = {
+            "s": "ask",
+            "i": "note",
+            "a": "update",
+            "target": None,
+            "obj": {},
+            "q": "Tengo varias notas sobre Aris. ¿Cuál quieres modificar?",
+            "r": None,
+            "pending": {
+                "field": "target_selection",
+                "original_action": "update",
+                "intent": "note",
+                "candidates": [{"id": "n1", "label": "Aris v1"}, {"id": "n2", "label": "Aris v2"}],
+            },
+            "ctx": None,
+        }
+
+        with patch.object(engine_mod, "ask_gpt", return_value=r_f):
+            vf, _, uf, _ = eng_f.process_message("modifica la nota de Aris")
+
+        if uf is not None:
+            raise AssertionError(f"smoke35F no modifica notas {uf!r}")
+        st_f = eng_f._thread_store.get_state()
+        if not st_f.get("open"):
+            raise AssertionError(f"smoke35F hilo abierto {st_f!r}")
+        if (st_f.get("pending") or {}).get("field") != "target_selection":
+            raise AssertionError(f"smoke35F pending.field target_selection {st_f!r}")
+
+    print("smoke 35 OK (note/update básico v0.47.37)")
+
+
 def main() -> int:
     try:
         smoke_1_2_ambiguous_then_continue()
@@ -5311,6 +5560,7 @@ def main() -> int:
         smoke_32_event_update_missing_target_can_offer_create_instead()
         smoke_33_event_minimal_identity_and_title_cleanup()
         smoke_34_robust_raw_reading_contract()
+        smoke_35_note_update_basic()
     except AssertionError as e:
         print(f"FAIL: {e}", file=sys.stderr)
         return 1
