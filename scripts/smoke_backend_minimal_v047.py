@@ -1744,6 +1744,295 @@ def smoke_18_clean_event_card_contract() -> None:
     )
 
 
+def _assert_empty_notes_tasks(engine: ArisMinimalEngine, label: str) -> None:
+    notes = engine._notes.list_notes()
+    tasks = engine._tasks.list_tasks()
+    if notes:
+        raise AssertionError(f"{label}: notes_store debe vacío, hay {notes!r}")
+    if tasks:
+        raise AssertionError(f"{label}: tasks_store debe vacío, hay {tasks!r}")
+
+
+def smoke_19_continue_guard_no_note_task() -> None:
+    """v0.47.29: en hilo abierto, mocks coherentes no crean nota/tarea en continuaciones."""
+    # ----- CASO A: hora tras cita con día fijado -----
+    r_a1: dict[str, Any] = {
+        "s": "ask",
+        "i": "event",
+        "a": "create",
+        "obj": {
+            "title": "cita con el médico",
+            "date": "lunes",
+            "date_iso": "2026-05-18",
+        },
+        "target": None,
+        "q": "¿A qué hora quieres poner la cita?",
+        "r": None,
+        "pending": {"field": "time"},
+        "ctx": None,
+    }
+    r_a2: dict[str, Any] = {
+        "s": "ready",
+        "i": "event",
+        "a": "create",
+        "obj": {
+            "title": "cita con el médico",
+            "date": "lunes",
+            "date_iso": "2026-05-18",
+            "time": "20:00",
+            "people": [],
+            "location": None,
+            "description": None,
+            "duration_minutes": None,
+        },
+        "target": None,
+        "q": None,
+        "r": "He guardado la cita con el médico para el lunes a las 20:00.",
+        "pending": None,
+        "ctx": None,
+    }
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        engine = _make_engine(base)
+        seq_a = iter([r_a1, r_a2])
+
+        def fa(_p: dict[str, Any]) -> dict[str, Any] | None:
+            return next(seq_a)
+
+        with patch.object(engine_mod, "ask_gpt", side_effect=fa):
+            engine.process_message(
+                "pon una cita con el médico el lunes"
+            )
+        if engine._events.list_events():
+            raise AssertionError("smoke19A1: sin evento tras primer turno")
+        st1 = engine._thread_store.get_state()
+        if not st1.get("open"):
+            raise AssertionError("smoke19A1: hilo abierto")
+        if str(st1.get("intent")) != "event":
+            raise AssertionError(st1.get("intent"))
+        pend1 = st1.get("pending") or {}
+        if pend1.get("field") != "time":
+            raise AssertionError(f"smoke19A1 pending: {pend1!r}")
+        _assert_empty_notes_tasks(engine, "smoke19A1")
+
+        with patch.object(engine_mod, "ask_gpt", return_value=r_a2):
+            engine.process_message("a las 20:00")
+
+        evsa = engine._events.list_events()
+        if len(evsa) != 1:
+            raise AssertionError(f"smoke19A2 eventos: {evsa!r}")
+        ev_a = evsa[0]
+        if str(ev_a.get("date_iso")) != "2026-05-18":
+            raise AssertionError(ev_a.get("date_iso"))
+        if str(ev_a.get("time_text")) != "20:00":
+            raise AssertionError(ev_a.get("time_text"))
+        _assert_empty_notes_tasks(engine, "smoke19A2")
+        if engine._thread_store.get_state().get("open"):
+            raise AssertionError("smoke19A2: hilo cerrado")
+
+    # ----- CASO B: fecha+hora en una sola réplica -----
+    r_b1: dict[str, Any] = {
+        "s": "ask",
+        "i": "event",
+        "a": "create",
+        "obj": {"title": "cita con el médico"},
+        "target": None,
+        "q": "¿Qué día y a qué hora quieres poner la cita?",
+        "r": None,
+        "pending": {"field": "date_time"},
+        "ctx": None,
+    }
+    r_b2: dict[str, Any] = {
+        "s": "ready",
+        "i": "event",
+        "a": "create",
+        "obj": {
+            "title": "cita con el médico",
+            "date": "lunes",
+            "date_iso": "2026-05-18",
+            "time": "15:00",
+            "people": [],
+            "location": None,
+            "description": None,
+            "duration_minutes": None,
+        },
+        "target": None,
+        "q": None,
+        "r": "He guardado la cita con el médico para el lunes a las 15:00.",
+        "pending": None,
+        "ctx": None,
+    }
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        engine = _make_engine(base)
+        seq_b = iter([r_b1, r_b2])
+
+        def fb(_p: dict[str, Any]) -> dict[str, Any] | None:
+            return next(seq_b)
+
+        with patch.object(engine_mod, "ask_gpt", side_effect=fb):
+            engine.process_message("pon una cita con el médico")
+            engine.process_message("el lunes a las 15h")
+        evsb = engine._events.list_events()
+        if len(evsb) != 1:
+            raise AssertionError(f"smoke19B eventos: {evsb!r}")
+        _assert_empty_notes_tasks(engine, "smoke19B")
+        if engine._thread_store.get_state().get("open"):
+            raise AssertionError("smoke19B hilo cerrado")
+        for row in engine._notes.list_notes():
+            c = str(row.get("content") or "")
+            if "el lunes a las 15h" in c or c.strip() == "el lunes a las 15h":
+                raise AssertionError(f"smoke19B no nota con input: {row!r}")
+
+    # ----- CASO C: delete_confirmation + «sí» -----
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        engine = _make_engine(base)
+        row = engine._events.add_event(
+            {
+                "title": "cita con el médico",
+                "date_text": "lunes",
+                "date_iso": "2026-05-18",
+                "time_text": "15:00",
+                "participants": [],
+            }
+        )
+        eid = str(row["id"])
+        q_c = (
+            "¿Confirmas que quieres borrar la cita con el médico del "
+            "lunes a las 15:00?"
+        )
+        r_c1: dict[str, Any] = {
+            "s": "ask",
+            "i": "event",
+            "a": "delete",
+            "obj": {},
+            "target": eid,
+            "q": q_c,
+            "r": None,
+            "pending": {
+                "field": "delete_confirmation",
+                "options": ["sí", "no"],
+                "target": eid,
+            },
+            "ctx": None,
+        }
+        r_c2: dict[str, Any] = {
+            "s": "ready",
+            "i": "event",
+            "a": "delete",
+            "obj": {},
+            "target": eid,
+            "q": None,
+            "r": "He borrado la cita.",
+            "pending": None,
+            "ctx": None,
+        }
+        seq_c = iter([r_c1, r_c2])
+
+        def fc(_p: dict[str, Any]) -> dict[str, Any] | None:
+            return next(seq_c)
+
+        with patch.object(engine_mod, "ask_gpt", side_effect=fc):
+            engine.process_message("borra la cita")
+        if not engine._thread_store.get_state().get("open"):
+            raise AssertionError("smoke19C hilo esperado tras ask delete")
+        with patch.object(engine_mod, "ask_gpt", return_value=r_c2):
+            engine.process_message("sí")
+        if engine._events.list_events():
+            raise AssertionError("smoke19C evento debe borrarse")
+        for row_n in engine._notes.list_notes():
+            if str(row_n.get("content") or "").strip() in ("sí", "si"):
+                raise AssertionError(f"smoke19C sin nota sí: {row_n!r}")
+        if engine._tasks.list_tasks():
+            raise AssertionError("smoke19C sin tarea")
+        if engine._thread_store.get_state().get("open"):
+            raise AssertionError("smoke19C hilo cerrado")
+
+    # ----- CASO D: target_selection «la segunda» -----
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        engine = _make_engine(base)
+        ev1 = engine._events.add_event(
+            {
+                "title": "cita con Luis",
+                "date_text": "mañana",
+                "time_text": "10:00",
+                "participants": ["Luis"],
+            }
+        )
+        ev2 = engine._events.add_event(
+            {
+                "title": "cita con Luis",
+                "date_text": "viernes",
+                "time_text": "17:00",
+                "participants": ["Luis"],
+            }
+        )
+        id1 = str(ev1["id"])
+        id2 = str(ev2["id"])
+        q_d = (
+            "Tengo varias citas con Luis. ¿Cuál quieres modificar: "
+            "la de mañana a las 10:00 o la del viernes a las 17:00?"
+        )
+        r_d1: dict[str, Any] = {
+            "s": "ask",
+            "i": "event",
+            "a": "update",
+            "obj": {"time": "9"},
+            "target": None,
+            "q": q_d,
+            "r": None,
+            "pending": {
+                "field": "target_selection",
+                "candidates": [
+                    {"id": id1, "label": "cita con Luis · mañana · 10:00"},
+                    {"id": id2, "label": "cita con Luis · viernes · 17:00"},
+                ],
+                "original_action": "update",
+                "original_obj": {"time": "9"},
+            },
+            "ctx": None,
+        }
+        r_d2: dict[str, Any] = {
+            "s": "ready",
+            "i": "event",
+            "a": "update",
+            "target": id2,
+            "obj": {"time": "11:00"},
+            "q": None,
+            "r": "He cambiado la hora.",
+            "pending": None,
+            "ctx": None,
+        }
+        seq_d = iter([r_d1, r_d2])
+
+        def fd(_p: dict[str, Any]) -> dict[str, Any] | None:
+            return next(seq_d)
+
+        with patch.object(engine_mod, "ask_gpt", side_effect=fd):
+            engine.process_message("cambia la cita con Luis")
+            engine.process_message("la segunda")
+
+        notes_d = engine._notes.list_notes()
+        for rn in notes_d:
+            cn = str(rn.get("content") or "").strip().lower()
+            if "segunda" in cn or cn == "la segunda":
+                raise AssertionError(f"smoke19D no nota selección: {rn!r}")
+        if engine._tasks.list_tasks():
+            raise AssertionError("smoke19D sin tareas")
+        ev_after = engine._events.list_events()
+        by_id = {str(e.get("id")): e for e in ev_after}
+        if str(by_id[id1].get("time_text")) != "10:00":
+            raise AssertionError("smoke19D ev1 intacto")
+        if str(by_id[id2].get("time_text")) != "11:00":
+            raise AssertionError("smoke19D ev2 actualizado")
+        if engine._thread_store.get_state().get("open"):
+            raise AssertionError("smoke19D hilo debe cerrarse tras ready/update")
+
+    print("smoke 19 OK (guardia continuaciones sin nota/tarea accidental)")
+
+
 def main() -> int:
     try:
         smoke_1_2_ambiguous_then_continue()
@@ -1761,6 +2050,7 @@ def main() -> int:
         smoke_16_event_continue_variants_mocked()
         smoke_17_event_create_with_date_iso()
         smoke_18_clean_event_card_contract()
+        smoke_19_continue_guard_no_note_task()
     except AssertionError as e:
         print(f"FAIL: {e}", file=sys.stderr)
         return 1
