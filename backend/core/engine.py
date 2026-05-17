@@ -44,6 +44,7 @@ _MAX_CONTEXT_NEED_CONTEXT_DEPTH = 8
 
 _MSG_EVENT_CAL_IDENTITY = "¿Con quién o sobre qué es la cita?"
 _MSG_EVENT_CAL_DATE_ISO = "¿Qué fecha exacta corresponde a ese día?"
+_MSG_EVENT_NOT_FOUND = "No encuentro ese evento en tu agenda local."
 
 _DATE_ISO_BASIC_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
@@ -338,6 +339,53 @@ class ArisMinimalEngine:
             }
         )
         return (q_id, "ambiguo", None, None)
+
+    @staticmethod
+    def _build_create_instead_event_question(ev_payload: dict[str, Any]) -> str:
+        """Construye pregunta «¿crear en su lugar?» a partir del payload normalizado."""
+        prefix = "No encuentro esa cita para modificarla."
+        parts: list[str] = []
+        participants = ev_payload.get("participants")
+        if isinstance(participants, list) and participants:
+            persona = str(participants[0]).strip()
+            if persona:
+                parts.append(f"con {persona}")
+        elif not parts:
+            title = str(ev_payload.get("title") or "").strip()
+            if title and not ArisMinimalEngine._is_generic_event_title(title):
+                parts.append(f"«{title}»")
+        date_txt = str(ev_payload.get("date_text") or "").strip()
+        if date_txt:
+            parts.append(f"para el {date_txt}")
+        time_txt = str(ev_payload.get("time_text") or "").strip()
+        if time_txt:
+            parts.append(f"a las {time_txt}")
+        if parts:
+            detail = " ".join(parts)
+            return f"{prefix} ¿Quieres crear una nueva cita {detail}?"
+        return f"{prefix} ¿Quieres crear una nueva cita con esos datos?"
+
+    @staticmethod
+    def _prefixed_event_obj_from_payload(
+        ev_payload: dict[str, Any],
+        original_obj: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Devuelve ``original_obj`` enriquecido con claves ``cal_*`` del payload."""
+        merged: dict[str, Any] = dict(
+            original_obj if isinstance(original_obj, dict) else {}
+        )
+        if ev_payload.get("title"):
+            merged.setdefault("cal_title", ev_payload["title"])
+        if ev_payload.get("date_text"):
+            merged.setdefault("cal_date_text", ev_payload["date_text"])
+        if ev_payload.get("date_iso"):
+            merged.setdefault("cal_date_iso", ev_payload["date_iso"])
+        if ev_payload.get("time_text"):
+            merged.setdefault("cal_time_text", ev_payload["time_text"])
+        participants = ev_payload.get("participants")
+        if isinstance(participants, list) and participants:
+            merged.setdefault("cal_people", participants)
+        return merged
 
     @staticmethod
     def _is_complete_event_create_obj(obj: dict[str, Any]) -> bool:
@@ -976,9 +1024,40 @@ class ArisMinimalEngine:
             )
 
         if self._events.get_event_by_id(tid) is None:
+            # Intentar recuperación: si el obj contiene ficha creable, ofrecer crear en su lugar.
+            obj_d = obj if isinstance(obj, dict) else {}
+            ev_payload = self._event_payload(obj_d)
+            if (
+                ev_payload is not None
+                and self._event_create_has_minimal_identity(ev_payload)
+                and ev_payload.get("date_iso") is not None
+                and str(ev_payload.get("date_iso")).strip() != ""
+                and _DATE_ISO_BASIC_RE.match(str(ev_payload.get("date_iso"))) is not None
+                and ev_payload.get("time_text") is not None
+                and str(ev_payload.get("time_text")).strip() != ""
+            ):
+                q_instead = self._build_create_instead_event_question(ev_payload)
+                thread_obj = self._prefixed_event_obj_from_payload(ev_payload, obj_d)
+                self._thread_store.save_state(
+                    {
+                        "open": True,
+                        "intent": "event",
+                        "action": "create",
+                        "object": thread_obj,
+                        "last_question": q_instead,
+                        "pending": {
+                            "field": "create_instead_confirmation",
+                            "original_action": "update",
+                            "suggested_action": "create",
+                        },
+                        "target": None,
+                    }
+                )
+                return (q_instead, "ambiguo", None, None)
+            # Ficha no creable: comportamiento original.
             self._thread_store.clear_state()
             return (
-                "No encuentro ese evento en tu agenda local.",
+                _MSG_EVENT_NOT_FOUND,
                 "consulta",
                 None,
                 None,

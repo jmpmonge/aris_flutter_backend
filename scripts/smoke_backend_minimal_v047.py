@@ -4710,6 +4710,256 @@ def smoke_31_event_create_requires_minimal_identity() -> None:
     print("smoke 31 OK (identidad mínima evento v0.47.36.8)")
 
 
+def smoke_32_event_update_missing_target_can_offer_create_instead() -> None:
+    """v0.47.36.9 — event/update con target inexistente y ficha creable ofrece crear."""
+
+    # ── CASO A ── update target inexistente + obj creable → pregunta crear ──────────────
+    r_update_missing: dict[str, Any] = {
+        "s": "ready",
+        "i": "event",
+        "a": "update",
+        "target": "missing-event-id",
+        "obj": {
+            "cal_title": "cita con Luis",
+            "cal_date_text": "martes",
+            "cal_date_iso": "2026-05-19",
+            "cal_time_text": "14:00",
+            "cal_people": ["Luis"],
+        },
+        "q": None,
+        "r": "He cambiado la cita.",
+        "pending": None,
+        "ctx": None,
+    }
+
+    with tempfile.TemporaryDirectory() as d_a:
+        base = Path(d_a)
+        eng_a = _make_engine(base)
+
+        with patch.object(engine_mod, "ask_gpt", return_value=r_update_missing):
+            va, _, ea, _ = eng_a.process_message("cita para el martes a la 14h con luis")
+
+        # NO crea evento
+        if ea is not None:
+            raise AssertionError(f"smoke32A no debe crear evento {ea!r}")
+        if eng_a._events.list_events():
+            raise AssertionError("smoke32A no debe haber eventos en el store")
+
+        # NO devuelve el r de GPT "He cambiado la cita."
+        if (va or "").lower().strip() == "he cambiado la cita.":
+            raise AssertionError(f"smoke32A no debe devolver r original {va!r}")
+
+        # Respuesta contiene las frases clave
+        val_a = (va or "").lower()
+        if "no encuentro esa cita para modificarla" not in val_a:
+            raise AssertionError(f"smoke32A must contain 'no encuentro esa cita para modificarla' {va!r}")
+        if "crear una nueva cita" not in val_a:
+            raise AssertionError(f"smoke32A must contain 'crear una nueva cita' {va!r}")
+
+        # Hilo abierto en create_instead_confirmation
+        st_a = eng_a._thread_store.get_state()
+        if not st_a.get("open"):
+            raise AssertionError(f"smoke32A hilo debe estar abierto {st_a!r}")
+        if st_a.get("intent") != "event":
+            raise AssertionError(f"smoke32A intent {st_a!r}")
+        if st_a.get("action") != "create":
+            raise AssertionError(f"smoke32A action {st_a!r}")
+        pend_a = st_a.get("pending") or {}
+        if pend_a.get("field") != "create_instead_confirmation":
+            raise AssertionError(f"smoke32A pending.field {st_a!r}")
+
+        # thread.object contiene claves cal_*
+        obj_a = st_a.get("object") or {}
+        for k in ("cal_title", "cal_date_iso", "cal_time_text", "cal_people"):
+            if not obj_a.get(k):
+                raise AssertionError(f"smoke32A thread.object sin {k}: {obj_a!r}")
+
+        # last_focus y last_action no cambian a update/create
+        lf_a = st_a.get("last_focus")
+        la_a = st_a.get("last_action")
+        # No deben haber sido actualizados (stores limpios, sin ejecución)
+        if isinstance(la_a, dict) and la_a.get("action") in ("create", "update"):
+            raise AssertionError(f"smoke32A last_action no debe cambiar {la_a!r}")
+
+    # ── CASO B ── continuación "sí" → crea evento ─────────────────────────────────────
+    r_confirm_create: dict[str, Any] = {
+        "s": "ready",
+        "i": "event",
+        "a": "create",
+        "target": None,
+        "obj": {
+            "cal_title": "cita con Luis",
+            "cal_date_text": "martes",
+            "cal_date_iso": "2026-05-19",
+            "cal_time_text": "14:00",
+            "cal_people": ["Luis"],
+        },
+        "q": None,
+        "r": "He creado la cita con Luis para el martes a las 14:00.",
+        "pending": None,
+        "ctx": None,
+    }
+
+    with tempfile.TemporaryDirectory() as d_b:
+        base = Path(d_b)
+        eng_b = _make_engine(base)
+
+        seq_b = iter([r_update_missing, r_confirm_create])
+
+        def fseq_b(_p: dict[str, Any]) -> dict[str, Any] | None:
+            return next(seq_b)
+
+        with patch.object(engine_mod, "ask_gpt", side_effect=fseq_b):
+            eng_b.process_message("cita para el martes a la 14h con luis")
+            vb, _, sb, _ = eng_b.process_message("sí")
+
+        if sb is None:
+            raise AssertionError("smoke32B debe crear evento")
+        if str(sb.get("title")) != "cita con Luis":
+            raise AssertionError(f"smoke32B title {sb!r}")
+        if str(sb.get("date_iso")) != "2026-05-19":
+            raise AssertionError(f"smoke32B date_iso {sb!r}")
+        if str(sb.get("time_text")) != "14:00":
+            raise AssertionError(f"smoke32B time_text {sb!r}")
+        if sb.get("participants") != ["Luis"]:
+            raise AssertionError(f"smoke32B participants {sb!r}")
+        evs_b = eng_b._events.list_events()
+        if len(evs_b) != 1:
+            raise AssertionError(f"smoke32B un evento {evs_b!r}")
+        st_b = eng_b._thread_store.get_state()
+        if st_b.get("open"):
+            raise AssertionError(f"smoke32B hilo cerrado {st_b!r}")
+        if (st_b.get("last_focus") or {}).get("domain") != "event":
+            raise AssertionError(f"smoke32B last_focus {st_b!r}")
+        if (st_b.get("last_action") or {}).get("domain") != "event":
+            raise AssertionError(f"smoke32B last_action domain {st_b!r}")
+        if (st_b.get("last_action") or {}).get("action") != "create":
+            raise AssertionError(f"smoke32B last_action action {st_b!r}")
+
+    # ── CASO C ── update target inexistente + obj incompleto → mensaje original ────────
+    r_update_incomplete: dict[str, Any] = {
+        "s": "ready",
+        "i": "event",
+        "a": "update",
+        "target": "missing-event-id",
+        "obj": {
+            "cal_title": "cita con Luis",
+        },
+        "q": None,
+        "r": "He cambiado la cita.",
+        "pending": None,
+        "ctx": None,
+    }
+
+    with tempfile.TemporaryDirectory() as d_c:
+        base = Path(d_c)
+        eng_c = _make_engine(base)
+
+        with patch.object(engine_mod, "ask_gpt", return_value=r_update_incomplete):
+            vc, _, ec, _ = eng_c.process_message("modifica la cita")
+
+        if ec is not None:
+            raise AssertionError(f"smoke32C no debe crear {ec!r}")
+        # Respuesta debe ser el mensaje de no encontrado, no create_instead
+        vc_lc = (vc or "").lower()
+        if "no encuentro esa cita para modificarla" in vc_lc:
+            raise AssertionError(f"smoke32C no debe ofrecer crear (obj incompleto) {vc!r}")
+        # El mensaje de no encontrado o similar debe aparecer
+        if "no encuentro" not in vc_lc:
+            raise AssertionError(f"smoke32C debe decir no encuentro {vc!r}")
+        st_c = eng_c._thread_store.get_state()
+        if st_c.get("open"):
+            raise AssertionError(f"smoke32C hilo cerrado {st_c!r}")
+        if (st_c.get("pending") or {}).get("field") == "create_instead_confirmation":
+            raise AssertionError(f"smoke32C no pending create_instead {st_c!r}")
+
+    # ── CASO D ── event/delete target inexistente → no ofrece crear ───────────────────
+    r_delete_missing: dict[str, Any] = {
+        "s": "ready",
+        "i": "event",
+        "a": "delete",
+        "target": "missing-event-id",
+        "obj": {
+            "cal_title": "cita con Luis",
+            "cal_date_iso": "2026-05-19",
+            "cal_time_text": "14:00",
+            "cal_people": ["Luis"],
+        },
+        "q": None,
+        "r": "He borrado la cita.",
+        "pending": None,
+        "ctx": None,
+    }
+
+    with tempfile.TemporaryDirectory() as d_d:
+        base = Path(d_d)
+        eng_d = _make_engine(base)
+
+        with patch.object(engine_mod, "ask_gpt", return_value=r_delete_missing):
+            vd, _, ed, _ = eng_d.process_message("borra la cita con luis")
+
+        if ed is not None:
+            raise AssertionError(f"smoke32D no debe crear {ed!r}")
+        vd_lc = (vd or "").lower()
+        if "crear una nueva cita" in vd_lc:
+            raise AssertionError(f"smoke32D delete no ofrece crear {vd!r}")
+        if "no encuentro" not in vd_lc:
+            raise AssertionError(f"smoke32D mensaje no encontrado {vd!r}")
+        st_d = eng_d._thread_store.get_state()
+        if (st_d.get("pending") or {}).get("field") == "create_instead_confirmation":
+            raise AssertionError(f"smoke32D delete no crea pending {st_d!r}")
+
+    # ── CASO E ── event/update target existente sigue actualizando normalmente ─────────
+    r_update_real: dict[str, Any] = {
+        "s": "ready",
+        "i": "event",
+        "a": "update",
+        "target": None,  # se rellena más abajo con eid real
+        "obj": {
+            "cal_time_text": "15:00",
+        },
+        "q": None,
+        "r": "He actualizado la cita.",
+        "pending": None,
+        "ctx": None,
+    }
+
+    with tempfile.TemporaryDirectory() as d_e:
+        base = Path(d_e)
+        eng_e = _make_engine(base)
+        row_e = eng_e._events.add_event(
+            {
+                "title": "cita con Luis",
+                "date_text": "martes",
+                "date_iso": "2026-05-19",
+                "time_text": "14:00",
+                "participants": ["Luis"],
+            }
+        )
+        eid_e = str(row_e["id"])
+        r_update_real = dict(r_update_real)
+        r_update_real["target"] = eid_e
+
+        with patch.object(engine_mod, "ask_gpt", return_value=r_update_real):
+            ve, _, ue, _ = eng_e.process_message("cambia la cita a las 15")
+
+        if ue is None:
+            raise AssertionError("smoke32E debe actualizar")
+        if str(ue.get("time_text")) != "15:00":
+            raise AssertionError(f"smoke32E time_text {ue!r}")
+        # No pregunta crear nueva cita
+        ve_lc = (ve or "").lower()
+        if "crear una nueva cita" in ve_lc:
+            raise AssertionError(f"smoke32E no debe ofrecer crear {ve!r}")
+        st_e = eng_e._thread_store.get_state()
+        if st_e.get("open"):
+            raise AssertionError(f"smoke32E hilo cerrado {st_e!r}")
+        if (st_e.get("last_action") or {}).get("action") != "update":
+            raise AssertionError(f"smoke32E last_action.action update {st_e!r}")
+
+    print("smoke 32 OK (event/update target inexistente → ofrece crear v0.47.36.9)")
+
+
 def main() -> int:
     try:
         smoke_1_2_ambiguous_then_continue()
@@ -4740,6 +4990,7 @@ def main() -> int:
         smoke_29_normalize_complete_create_ask()
         smoke_30_last_focus_does_not_dominate_new_event_card()
         smoke_31_event_create_requires_minimal_identity()
+        smoke_32_event_update_missing_target_can_offer_create_instead()
     except AssertionError as e:
         print(f"FAIL: {e}", file=sys.stderr)
         return 1

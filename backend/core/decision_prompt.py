@@ -830,6 +830,28 @@ Si **mode = continue** y **thread.pending.field** es **delete_confirmation**:
 - Aris **no** decide esas equivalencias locales; vos interpretás.
 
 
+Si **mode = continue** y **thread.pending.field** es **create_instead_confirmation** (**v0.47.36.9**):
+
+Contexto: Aris encontró un **event/update** con **target inexistente** pero el **obj** contenía una ficha de evento creable. Propuso crear una nueva cita y guardó esa ficha en **thread.object** con claves **cal_***.
+
+- Si **raw** confirma («sí», «vale», «créala», «sí, créala», «adelante», «de acuerdo», «anda», «ok»):
+  - Devolvé **s = ready**, **i = event**, **a = create**, **target = null**, **pending = null**.
+  - Usá **thread.object** tal cual como **obj** (ya tiene **cal_title**, **cal_date_text**, **cal_date_iso**, **cal_time_text**, **cal_people**, etc.).
+  - **r** natural, ej.: «He creado la cita con Luis para el martes a las 14:00.» (usa los datos de **thread.object**).
+  - **No** devolvás **event/update**. **No** pidas contexto. **No** busques evento existente.
+
+- Si **raw** cancela («no», «cancela», «no la crees», «déjalo», «no gracias»):
+  - Devolvé **s = answer**, **pending = null**, **r** natural tipo «De acuerdo, no creo la cita.».
+
+- Si **raw** corrige un dato («mejor el miércoles», «con Pedro», «a las 15», «cambia la hora»):
+  - Actualizá el campo correspondiente en **obj** tomando los datos de **thread.object** fusionados con la corrección.
+  - Si la ficha queda completa (fecha civil, hora, identidad), devolvé **s = ready**, **i = event**, **a = create**, **target = null**, **pending = null**, **obj** con los datos fusionados.
+  - Si tras la corrección aún falta algo, podés **ask** con la ficha parcial.
+
+- **No** devolvás **event/update** en ningún caso desde este **pending**.
+- **No** crees **note**/ **task** con la réplica de confirmación cuando el hilo es **create_instead_confirmation**.
+
+
 BORRADO SEGURO DE TAREAS (acción destructiva — **no** confundir con **event**/**agenda**):
 
 Si el usuario pide **borrar**, **eliminar**, **quitar** o **cancelar** una **tarea**/**pendiente**/**cosa por hacer** (no una **cita**/**evento**):
