@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from copy import deepcopy
 from typing import Any
 
 from backend.core.context_resolver import resolver_contexto
@@ -15,6 +16,7 @@ from backend.core.payload_builder import (
     sanitize_visible_text,
 )
 from backend.storage.events_store import EventsStore
+from backend.storage.json_store import utc_now_iso
 from backend.storage.notes_store import NotesStore
 from backend.storage.tasks_store import TasksStore
 from backend.storage.thread_state_store import ThreadStateStore
@@ -36,9 +38,42 @@ _MSG_FAIL_FALLBACK = (
     "No estoy captando toda la información necesaria. ¿Podrías escribirlo de nuevo "
     "de forma más concreta?"
 )
+_MSG_ANSWER_FALSE_MUTATION = "No he ejecutado ningún cambio en este turno."
 _MAX_CONTEXT_NEED_CONTEXT_DEPTH = 8
 
 _DATE_ISO_BASIC_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+# Subcadenas (español) que no deben figurar como **consulta informática** cuando no hubo
+# mutación persistida (**s**=answer sin ejecución de store previa en ese turno).
+_MUTATION_CLAIM_HINTS: tuple[str, ...] = (
+    "he creado",
+    "he guardado",
+    "he actualizado",
+    "he cambiado",
+    "he modificado",
+    "he borrado",
+    "he eliminado",
+    "he quitado",
+    "he completado",
+    "he marcado",
+    "ya he creado",
+    "ya he cambiado",
+    "ya está cambiado",
+    "queda cambiado",
+    "queda actualizado",
+)
+
+_MUTATION_CLAIM_NEGATION_MARKERS: tuple[str, ...] = (
+    "no he cambiado",
+    "no he modificado",
+    "no he creado",
+    "no he actualizado",
+    "no he guardado",
+    "no he borrado",
+    "no he eliminado",
+    "no he completado",
+    "no he marcado",
+)
 
 
 class ArisMinimalEngine:
@@ -55,6 +90,117 @@ class ArisMinimalEngine:
         self._tasks = tasks_store
         self._notes = notes_store
         self._thread_store = thread_store
+
+    @staticmethod
+    def _answer_claims_fresh_success_mutation(reply: str) -> bool:
+        """Indica texto de **consulta** con afirmación operativa plausible sin ejecución."""
+        lc = (reply or "").casefold()
+        if any(m in lc for m in _MUTATION_CLAIM_NEGATION_MARKERS):
+            return False
+        return any(pat in lc for pat in _MUTATION_CLAIM_HINTS)
+
+    def _answer_grounded_on_last_execution(self, reply: str) -> bool:
+        """True si el texto **answer** remite de forma coherente a **last_action**."""
+        lc = (reply or "").casefold()
+        la = self._thread_store.get_state().get("last_action")
+        if not isinstance(la, dict):
+            return False
+        if str(la.get("status")) != "executed":
+            return False
+
+        domain = str(la.get("domain") or "")
+
+        mentions_cal = any(
+            x in lc
+            for x in (
+                "cita",
+                "evento",
+                "agenda",
+                "calendario",
+            )
+        )
+        if mentions_cal and domain != "event":
+            return False
+
+        if ("tarea" in lc or "tareas" in lc) and domain != "task":
+            return False
+
+        lbl = str(la.get("label") or "").strip().casefold()
+        if len(lbl) >= 4 and lbl in lc:
+            return True
+
+        res_raw = la.get("result")
+        if isinstance(res_raw, dict):
+            tm = str(res_raw.get("time_text") or "").strip().casefold()
+            if tm and tm in lc:
+                return True
+            dt_txt = str(res_raw.get("date_text") or "").strip().casefold()
+            if len(dt_txt) >= 3 and dt_txt in lc:
+                return True
+            tit = str(res_raw.get("title") or "").strip().casefold()
+            if len(tit) >= 4 and tit in lc:
+                return True
+        return False
+
+    @staticmethod
+    def _focus_label(domain: str, row: dict[str, Any]) -> str:
+        if domain == "note":
+            t = str(row.get("title") or "").strip()
+            if t:
+                return t
+            c = str(row.get("content") or "").strip()
+            return (c[:120] if c else str(row.get("id") or ""))
+        return str(row.get("title") or "").strip() or str(row.get("id") or "")
+
+    def _record_successful_mutation(
+        self,
+        *,
+        domain: str,
+        action: str,
+        row: dict[str, Any],
+        changed_fields: dict[str, Any],
+    ) -> None:
+        """Huella tras store OK: cierra hilo y persiste ``last_focus`` + ``last_action``."""
+        now = utc_now_iso()
+        label = self._focus_label(domain, row)
+        rid = str(row.get("id") or "")
+        lf = {
+            "domain": domain,
+            "id": rid,
+            "label": label,
+            "object": deepcopy(row),
+            "updated_at": now,
+        }
+        la = {
+            "status": "executed",
+            "domain": domain,
+            "action": action,
+            "id": rid,
+            "label": label,
+            "changed_fields": deepcopy(changed_fields),
+            "result": deepcopy(row),
+            "created_at": now,
+        }
+        self._thread_store.clear_state()
+        self._thread_store.save_state({"last_focus": lf, "last_action": la})
+
+    def _record_successful_delete(self, *, domain: str, snapshot: dict[str, Any]) -> None:
+        tid = str(snapshot.get("id") or "")
+        self._thread_store.discard_focus_matching(domain, tid)
+        self._thread_store.clear_state()
+        now = utc_now_iso()
+        label = self._focus_label(domain, snapshot)
+        la = {
+            "status": "executed",
+            "domain": domain,
+            "action": "delete",
+            "id": tid,
+            "label": label,
+            "changed_fields": {},
+            "result": deepcopy(snapshot),
+            "created_at": now,
+        }
+        self._thread_store.save_state({"last_action": la})
 
     def process_message(self, text: str) -> tuple[str, str, dict[str, Any] | None, str | None]:
         raw_in = (text or "").strip()
@@ -178,15 +324,20 @@ class ArisMinimalEngine:
 
         if s == "answer":
             self._thread_store.clear_state()
-            r = result["r"]
-            reply = sanitize_visible_text(r) if isinstance(r, str) else ""
+            r_raw = result.get("r")
+            reply = (
+                sanitize_visible_text(r_raw) if isinstance(r_raw, str) else ""
+            )
+            if reply and (
+                ArisMinimalEngine._answer_claims_fresh_success_mutation(reply)
+                and not self._answer_grounded_on_last_execution(reply)
+            ):
+                return (_MSG_ANSWER_FALSE_MUTATION, "consulta", None, None)
             return (reply or _MSG_OK, "consulta", None, None)
 
         if s == "fail":
             self._thread_store.clear_state()
-            r = result["r"]
-            reply = sanitize_visible_text(r) if isinstance(r, str) else ""
-            return (reply or _MSG_FAIL_FALLBACK, "consulta", None, None)
+            return (_MSG_FAIL_FALLBACK, "consulta", None, None)
 
         if s == "need_context":
             return self._flujo_need_context(peticion_raiz, result, depth=0)
@@ -206,8 +357,15 @@ class ArisMinimalEngine:
 
         if a == "answer":
             self._thread_store.clear_state()
-            r = result["r"]
-            reply = sanitize_visible_text(r) if isinstance(r, str) else ""
+            r_raw = result.get("r")
+            reply = (
+                sanitize_visible_text(r_raw) if isinstance(r_raw, str) else ""
+            )
+            if reply and (
+                ArisMinimalEngine._answer_claims_fresh_success_mutation(reply)
+                and not self._answer_grounded_on_last_execution(reply)
+            ):
+                return (_MSG_ANSWER_FALSE_MUTATION, "consulta", None, None)
             return (reply or _MSG_OK, "consulta", None, None)
 
         if a == "create":
@@ -267,7 +425,8 @@ class ArisMinimalEngine:
                 None,
             )
 
-        if self._events.get_event_by_id(tid) is None:
+        snap_evt = self._events.get_event_by_id(tid)
+        if snap_evt is None:
             self._thread_store.clear_state()
             return (
                 "No encuentro ese evento en tu agenda local.",
@@ -275,6 +434,8 @@ class ArisMinimalEngine:
                 None,
                 None,
             )
+
+        snapshot = dict(snap_evt)
 
         if not self._events.delete_event(tid):
             self._thread_store.clear_state()
@@ -285,7 +446,7 @@ class ArisMinimalEngine:
                 None,
             )
 
-        self._thread_store.clear_state()
+        self._record_successful_delete(domain="event", snapshot=snapshot)
         return (_reply_del("He borrado el evento."), "calendario", None, None)
 
     def _handle_ready_delete_task(
@@ -334,7 +495,7 @@ class ArisMinimalEngine:
                 None,
             )
 
-        self._thread_store.clear_state()
+        self._record_successful_delete(domain="task", snapshot=dict(removed))
         return (_reply_del("He borrado la tarea."), "tarea", None, None)
 
     def _handle_ready_complete_task(
@@ -382,7 +543,12 @@ class ArisMinimalEngine:
                 None,
             )
 
-        self._thread_store.clear_state()
+        self._record_successful_mutation(
+            domain="task",
+            action="complete",
+            row=updated,
+            changed_fields={"completed": True},
+        )
         return (
             _reply_done("He marcado la tarea como completada."),
             "tarea",
@@ -531,7 +697,17 @@ class ArisMinimalEngine:
             self._thread_store.clear_state()
             return ("No he podido actualizar esa tarea.", "consulta", None, None)
 
-        self._thread_store.clear_state()
+        cf_track: dict[str, Any] = dict(updates_eff)
+        if isinstance(obj, dict):
+            for key, val in obj.items():
+                if isinstance(key, str) and key.startswith("task_") and val is not None:
+                    cf_track[key] = val
+        self._record_successful_mutation(
+            domain="task",
+            action="update",
+            row=updated,
+            changed_fields=cf_track,
+        )
         return (
             _reply_saved("He actualizado la tarea."),
             "tarea",
@@ -593,7 +769,17 @@ class ArisMinimalEngine:
             self._thread_store.clear_state()
             return ("No he podido modificar ese evento.", "consulta", None, None)
 
-        self._thread_store.clear_state()
+        cf_evt: dict[str, Any] = dict(updates)
+        if isinstance(obj, dict):
+            for key, val in obj.items():
+                if isinstance(key, str) and key.startswith("cal_") and val is not None:
+                    cf_evt.setdefault(key, val)
+        self._record_successful_mutation(
+            domain="event",
+            action="update",
+            row=dict(updated),
+            changed_fields=cf_evt,
+        )
         return (
             _reply_saved("He actualizado el evento."),
             "calendario",
@@ -626,7 +812,12 @@ class ArisMinimalEngine:
             except ValueError:
                 self._thread_store.clear_state()
                 return ("No he podido guardar el evento.", "consulta", None, None)
-            self._thread_store.clear_state()
+            self._record_successful_mutation(
+                domain="event",
+                action="create",
+                row=saved,
+                changed_fields=dict(ev_payload),
+            )
             return (
                 _reply_saved("He guardado la cita."),
                 "calendario",
@@ -644,7 +835,12 @@ class ArisMinimalEngine:
             except ValueError:
                 self._thread_store.clear_state()
                 return ("No he podido guardar la tarea.", "consulta", None, None)
-            self._thread_store.clear_state()
+            self._record_successful_mutation(
+                domain="task",
+                action="create",
+                row=saved,
+                changed_fields=dict(task_payload),
+            )
             return (_reply_saved("He guardado la tarea."), "tarea", saved, None)
 
         if i == "note":
@@ -657,7 +853,12 @@ class ArisMinimalEngine:
             except ValueError:
                 self._thread_store.clear_state()
                 return ("No he podido guardar la nota.", "consulta", None, None)
-            self._thread_store.clear_state()
+            self._record_successful_mutation(
+                domain="note",
+                action="create",
+                row=saved,
+                changed_fields=dict(note_payload),
+            )
             return (_reply_saved("He guardado la nota."), "nota", saved, None)
 
         if i == "mail":

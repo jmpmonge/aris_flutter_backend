@@ -3200,6 +3200,10 @@ def smoke_25_disable_hidden_recent_recovery() -> None:
         raise AssertionError(f"smoke25A mode {pl_a!r}")
     if pl_a.get("thread") is not None:
         raise AssertionError(f"smoke25A thread {pl_a!r}")
+    if pl_a.get("last_focus") is not None:
+        raise AssertionError(f"smoke25A last_focus {pl_a!r}")
+    if pl_a.get("last_action") is not None:
+        raise AssertionError(f"smoke25A last_action {pl_a!r}")
     if "recent" in pl_a:
         raise AssertionError(f"smoke25A recent key {pl_a!r}")
 
@@ -3271,6 +3275,10 @@ def smoke_25_disable_hidden_recent_recovery() -> None:
     pl_c = build_payload("preguntar por los seguros", st_continue)
     if pl_c.get("mode") != "continue":
         raise AssertionError(f"smoke25C mode {pl_c!r}")
+    if pl_c.get("last_focus") is not None:
+        raise AssertionError(f"smoke25C last_focus {pl_c!r}")
+    if pl_c.get("last_action") is not None:
+        raise AssertionError(f"smoke25C last_action {pl_c!r}")
     th_c = pl_c.get("thread")
     if not isinstance(th_c, dict):
         raise AssertionError(f"smoke25C thread {pl_c!r}")
@@ -3560,6 +3568,266 @@ def smoke_26_prefixed_domain_contract() -> None:
     print("smoke 26 OK (contrato prefijado v0.47.36.3)")
 
 
+def smoke_27_last_focus_last_action_and_no_false_success() -> None:
+    """v0.47.36.4 — last_focus / last_action, payload, answer falsa y delete."""
+    safe_no_mut = "No he ejecutado ningún cambio en este turno."
+
+    r_task_create: dict[str, Any] = {
+        "s": "ready",
+        "i": "task",
+        "a": "create",
+        "obj": {
+            "task_title": "comprar leche",
+            "task_priority": "normal",
+            "task_tags": [],
+        },
+        "target": None,
+        "q": None,
+        "r": "He creado la tarea «comprar leche».",
+        "pending": None,
+        "ctx": None,
+    }
+
+    with tempfile.TemporaryDirectory() as d_abcde:
+        base = Path(d_abcde)
+        engine = _make_engine(base)
+
+        with patch.object(engine_mod, "ask_gpt", return_value=r_task_create):
+            _, _, row_a, _ = engine.process_message(
+                "crea una tarea para comprar leche"
+            )
+        if row_a is None:
+            raise AssertionError("smoke27A sin tarea")
+        tid = str(row_a["id"])
+        tsks = engine._tasks.list_tasks()
+        if len(tsks) != 1 or str(tsks[0].get("title")) != "comprar leche":
+            raise AssertionError(f"smoke27A {tsks!r}")
+
+        st_a = engine._thread_store.get_state()
+        if st_a.get("open"):
+            raise AssertionError("smoke27A abierto")
+        lf_a = st_a.get("last_focus")
+        la_a = st_a.get("last_action")
+        if not isinstance(lf_a, dict) or lf_a.get("domain") != "task":
+            raise AssertionError(f"smoke27A lf {lf_a!r}")
+        if str(lf_a.get("label") or "").lower() != "comprar leche":
+            raise AssertionError(f"smoke27A label {lf_a!r}")
+        if not isinstance(la_a, dict):
+            raise AssertionError(f"smoke27A la {la_a!r}")
+        for k in ("domain", "action", "status"):
+            if la_a.get(k) is None:
+                raise AssertionError(f"smoke27A la.{k}")
+        if la_a.get("domain") != "task" or la_a.get("action") != "create":
+            raise AssertionError(f"smoke27A domain/action {la_a!r}")
+        if la_a.get("status") != "executed":
+            raise AssertionError(f"smoke27A executed {la_a!r}")
+
+        pl_b = build_payload("Cambia el día para el miércoles", st_a)
+        if pl_b.get("mode") != "new" or pl_b.get("thread") is not None:
+            raise AssertionError(f"smoke27B {pl_b!r}")
+        if not isinstance(pl_b.get("last_focus"), dict):
+            raise AssertionError(f"smoke27B lf {pl_b!r}")
+        if not isinstance(pl_b.get("last_action"), dict):
+            raise AssertionError(f"smoke27B la {pl_b!r}")
+        if "recent" in pl_b:
+            raise AssertionError(f"smoke27B recent {pl_b!r}")
+
+        r_upd: dict[str, Any] = {
+            "s": "ready",
+            "i": "task",
+            "a": "update",
+            "target": tid,
+            "obj": {"task_due_date_text": "miércoles"},
+            "q": None,
+            "r": (
+                "He actualizado la tarea «comprar leche» para el miércoles."
+            ),
+            "pending": None,
+            "ctx": None,
+        }
+        with patch.object(engine_mod, "ask_gpt", return_value=r_upd):
+            _, _, row_c, _ = engine.process_message(
+                "Cambia el día para el miércoles"
+            )
+        if row_c is None:
+            raise AssertionError("smoke27C sin update")
+        if str(row_c.get("date_text") or "").lower() != "miércoles":
+            raise AssertionError(f"smoke27C date {row_c!r}")
+        if engine._events.list_events():
+            raise AssertionError("smoke27C evento")
+        st_c = engine._thread_store.get_state()
+        lac = st_c.get("last_action")
+        if not isinstance(lac, dict):
+            raise AssertionError(f"smoke27C la {lac!r}")
+        if lac.get("domain") != "task" or lac.get("action") != "update":
+            raise AssertionError(f"smoke27C la tipo {lac!r}")
+        lfc = st_c.get("last_focus")
+        if not isinstance(lfc, dict) or lfc.get("domain") != "task":
+            raise AssertionError(f"smoke27C lf {lfc!r}")
+        cfs = lac.get("changed_fields") or {}
+        if not isinstance(cfs, dict):
+            raise AssertionError("smoke27C cf tipo")
+        if not any(k in cfs for k in ("task_due_date_text", "date_text")):
+            raise AssertionError(f"smoke27C cf {cfs!r}")
+
+        prev_la_snap = json.loads(json.dumps(lac))
+
+        ctx_hits: list[int] = []
+        rc_real = engine_mod.resolver_contexto
+
+        def _wrap_ctx(*a: Any, **kw: Any) -> Any:
+            ctx_hits.append(1)
+            return rc_real(*a, **kw)
+
+        r_d: dict[str, Any] = {
+            "s": "answer",
+            "i": "general",
+            "a": "answer",
+            "obj": {},
+            "target": None,
+            "q": None,
+            "r": (
+                "No he cambiado ninguna cita. "
+                "Lo último que actualicé fue la tarea «comprar leche»."
+            ),
+            "pending": None,
+            "ctx": None,
+        }
+
+        with patch.object(engine_mod, "resolver_contexto", side_effect=_wrap_ctx):
+            with patch.object(engine_mod, "ask_gpt", return_value=r_d):
+                vis_d, _, _, _ = engine.process_message(
+                    "qué cita has cambiado?"
+                )
+        if ctx_hits:
+            raise AssertionError("smoke27D contexto llamado")
+
+        vd = (vis_d or "").lower()
+        if "cita" not in vd:
+            raise AssertionError(f"smoke27D vis {vis_d!r}")
+        if "leche" not in vd:
+            raise AssertionError(f"smoke27D contraste {vis_d!r}")
+
+        lista_d = engine._tasks.list_tasks()
+        if len(lista_d) != 1:
+            raise AssertionError("smoke27D lista tareas")
+
+        r_e: dict[str, Any] = {
+            "s": "answer",
+            "i": "general",
+            "a": "answer",
+            "obj": {},
+            "target": None,
+            "q": None,
+            "r": "He cambiado la cita para el miércoles a las 15:00.",
+            "pending": None,
+            "ctx": None,
+        }
+
+        before_e = dict(engine._tasks.list_tasks()[0])
+        with patch.object(engine_mod, "ask_gpt", return_value=r_e):
+            vis_e, _, _, _ = engine.process_message(
+                "Cambia el día para el miércoles"
+            )
+
+        if (vis_e or "").strip() != safe_no_mut:
+            raise AssertionError(f"smoke27E mensaje seguro {vis_e!r}")
+        forbidden = "he cambiado la cita para el miércoles"
+        if forbidden in (vis_e or "").lower():
+            raise AssertionError(f"smoke27E fugó claim {vis_e!r}")
+
+        lista_e = engine._tasks.list_tasks()
+        if len(lista_e) != 1 or lista_e[0].get("date_text") != before_e.get(
+            "date_text"
+        ):
+            raise AssertionError("smoke27E tarea mutada indebidamente")
+
+        la_e = engine._thread_store.get_state().get("last_action")
+
+        if json.dumps(la_e, sort_keys=True) != json.dumps(
+            prev_la_snap, sort_keys=True
+        ):
+            raise AssertionError("smoke27E last_action diferente")
+
+    # --- F + G: agenda real + answer desde efecto ejecutado ---
+    r_evupd: dict[str, Any] = {
+        "s": "ready",
+        "i": "event",
+        "a": "update",
+        "target": "",
+        "obj": {"cal_time_text": "12:00"},
+        "q": None,
+        "r": "He actualizado la cita.",
+        "pending": None,
+        "ctx": None,
+    }
+
+    r_g: dict[str, Any] = {
+        "s": "answer",
+        "i": "general",
+        "a": "answer",
+        "obj": {},
+        "target": None,
+        "q": None,
+        "r": (
+            'He cambiado la cita «revisión médica» y ahora está a las 12:00.'
+        ),
+        "pending": None,
+        "ctx": None,
+    }
+
+    with tempfile.TemporaryDirectory() as d_fg:
+        base = Path(d_fg)
+        engine = _make_engine(base)
+        ev0 = engine._events.add_event(
+            {
+                "title": "revisión médica",
+                "date_text": "mañana",
+                "time_text": "09:00",
+                "participants": [],
+            }
+        )
+        eid = str(ev0["id"])
+        r_fu = dict(r_evupd)
+        r_fu["target"] = eid
+
+        hits_g: list[int] = []
+        rc2 = engine_mod.resolver_contexto
+
+        def _wrap2(*a: Any, **kw: Any) -> Any:
+            hits_g.append(1)
+            return rc2(*a, **kw)
+
+        with patch.object(engine_mod, "ask_gpt", return_value=r_fu):
+            _, _, ev_u, _ = engine.process_message("cambia hora médico")
+        if ev_u is None or str(ev_u.get("time_text")) != "12:00":
+            raise AssertionError(f"smoke27F {ev_u!r}")
+
+        st_f = engine._thread_store.get_state()
+        lf_f = st_f.get("last_focus")
+        la_f = st_f.get("last_action")
+        if lf_f.get("domain") != "event" or la_f.get("domain") != "event":
+            raise AssertionError(f"smoke27F domain {lf_f!r} / {la_f!r}")
+
+        if la_f.get("action") != "update":
+            raise AssertionError(f"smoke27F action {la_f!r}")
+
+        with patch.object(engine_mod, "resolver_contexto", side_effect=_wrap2):
+            with patch.object(engine_mod, "ask_gpt", return_value=r_g):
+                vis_g, _, _, _ = engine.process_message(
+                    "qué cita has cambiado?"
+                )
+        if hits_g:
+            raise AssertionError("smoke27G need_context ")
+        lg = (vis_g or "").lower()
+
+        # Debe responder sobre la última acción ejecutada (event/update), no lista agenda.
+        if "12:00" not in lg and "médica" not in lg:
+            raise AssertionError(f"smoke27G vis {vis_g!r}")
+
+    print("smoke 27 OK (last_focus/last_action v0.47.36.4)")
+
+
 def main() -> int:
     try:
         smoke_1_2_ambiguous_then_continue()
@@ -3585,6 +3853,7 @@ def main() -> int:
         smoke_24_recoverable_task_update_state()
         smoke_25_disable_hidden_recent_recovery()
         smoke_26_prefixed_domain_contract()
+        smoke_27_last_focus_last_action_and_no_false_success()
     except AssertionError as e:
         print(f"FAIL: {e}", file=sys.stderr)
         return 1

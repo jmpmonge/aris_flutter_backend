@@ -61,9 +61,13 @@ def build_payload(raw_text: str, thread_state: dict[str, Any] | None) -> dict[st
     Si **open=true**: **mode=continue** y **thread** incluye **intent**, **action**,
     **object**, **last_question**, **pending**, **target** (puede ser null).
 
-    Si **open=false**: **mode=new**, **thread** **null**. No se envían huellas ocultas
-    de turnos cerrados (**last_recoverable** u otros campos paralelos): cada mensaje
-    nuevo llega como petición nueva.
+    Si **open=false**: **mode=new**, **thread** **null**, **last_focus** y **last_action**
+    (contexto técnico del último objeto tocado y última mutación ejecutada real, si existen).
+
+    Si **open=true**: además **last_focus:null** y **last_action:null** (no exponer ese
+    contexto técnico mientras hay hilo operativo abierto).
+
+    No se envía **recent** ni **last_recoverable**.
     """
     raw = (raw_text or "").strip()
 
@@ -84,12 +88,17 @@ def build_payload(raw_text: str, thread_state: dict[str, Any] | None) -> dict[st
             "pending": thread_state.get("pending"),
             "target": thread_state.get("target"),
         }
+        base["last_focus"] = None
+        base["last_action"] = None
         base["rules"] = {
             "hide_internal": True,
         }
     else:
         base["mode"] = "new"
         base["thread"] = None
+        ts_in = thread_state if isinstance(thread_state, dict) else {}
+        base["last_focus"] = ts_in.get("last_focus")
+        base["last_action"] = ts_in.get("last_action")
         base["rules"] = {
             "hide_internal": True,
         }

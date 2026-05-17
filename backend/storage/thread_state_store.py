@@ -1,8 +1,11 @@
 """Estado de hilo conversacional — persistencia sin semántica.
 
-Contrato de hilo para **GPT** (**mode=continue**): cuando **open** es **true**, el
-motor persiste intent, action, object, last_question, pending y **target**.
-**updated_at** se actualiza al guardar. No se reenvían al modelo operaciones de turnos ya cerrados.
+Contrato para **GPT** (**mode=continue**): cuando **open** es **true**, persiste intent,
+action, object, last_question, pending y **target**.
+
+Cuando **open** es **false**, **last_focus** y **last_action** conservan huella técnica
+(no abren hilo) de último objeto tocado y última mutación ejecutada con éxito.
+**clear_state** cierra campos del hilo pero **no borra** last_focus/last_action.
 """
 
 from __future__ import annotations
@@ -26,6 +29,8 @@ DEFAULT_THREAD_STATE: dict[str, Any] = {
     "last_question": None,
     "pending": None,
     "target": None,
+    "last_focus": None,
+    "last_action": None,
     "updated_at": None,
 }
 
@@ -59,10 +64,43 @@ class ThreadStateStore:
         return base
 
     def clear_state(self) -> None:
-        save_json_dict(self._path, deepcopy(DEFAULT_THREAD_STATE))
+        """Cierra **hilo** operativo (**open**/intent/pending/…) sin borrar last_focus."""
+        prev = load_json_dict(self._path, {})
+        lf = prev.get("last_focus") if isinstance(prev, dict) else None
+        la = prev.get("last_action") if isinstance(prev, dict) else None
+        base = deepcopy(DEFAULT_THREAD_STATE)
+        base["last_focus"] = lf
+        base["last_action"] = la
+        base.update(
+            {
+                "open": False,
+                "intent": None,
+                "action": None,
+                "object": None,
+                "last_question": None,
+                "pending": None,
+                "target": None,
+            }
+        )
+        base["updated_at"] = utc_now_iso()
+        save_json_dict(self._path, base)
 
     def is_open(self) -> bool:
         return bool(self.get_state().get("open"))
+
+    def set_last_focus(self, blob: dict[str, Any] | None) -> None:
+        self.save_state({"last_focus": blob})
+
+    def set_last_action(self, blob: dict[str, Any] | None) -> None:
+        self.save_state({"last_action": blob})
+
+    def discard_focus_matching(self, domain: str, obj_id: str) -> None:
+        st = self.get_state()
+        lf = st.get("last_focus")
+        if isinstance(lf, dict) and str(lf.get("domain")) == str(
+            domain
+        ) and str(lf.get("id")) == str(obj_id):
+            self.save_state({"last_focus": None})
 
     def _normalize_closed_fields(self, data: dict[str, Any]) -> None:
         data.pop("last_recoverable", None)
