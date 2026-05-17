@@ -86,16 +86,18 @@ class NotesStore:
         save_json_list(self._path, items)
         return cur
 
-    def delete_note(self, note_id: str) -> bool:
+    def delete_note(self, note_id: str) -> dict[str, Any] | None:
         nid = str(note_id).strip()
         if not nid:
-            return False
+            return None
         items = self.list_notes()
+        idx = next((i for i, n in enumerate(items) if str(n.get("id")) == nid), None)
+        if idx is None:
+            return None
+        snapshot = dict(items[idx])
         new_items = [n for n in items if str(n.get("id")) != nid]
-        if len(new_items) == len(items):
-            return False
         save_json_list(self._path, new_items)
-        return True
+        return snapshot
 
     @staticmethod
     def _opt_str(v: Any) -> str | None:

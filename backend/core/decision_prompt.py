@@ -929,6 +929,64 @@ Flujo de context_response para **note**/**update**:
 - **count > 1**: **ask** con **pending.field** **target_selection**, **pending.original_action** **update**, **pending.intent** **note**, **pending.candidates** (listas con **id** y **label** sin UUIDs visibles en **q**/**r**).
 
 
+BORRADO SEGURO DE NOTAS (**v0.47.38**):
+
+Para borrar una nota, **siempre** se requiere confirmación visible antes de ejecutar.
+
+Paso 1 — Identificar la nota (pedir contexto si hace falta):
+
+{
+  \"s\": \"ask\",
+  \"i\": \"note\",
+  \"a\": \"delete\",
+  \"target\": \"<id-nota>\",
+  \"obj\": {},
+  \"q\": \"¿Seguro que quieres borrar la nota «...»?\",
+  \"pending\": {
+    \"field\": \"delete_confirmation\",
+    \"target\": \"<id-nota>\",
+    \"intent\": \"note\",
+    \"original_action\": \"delete\"
+  },
+  \"ctx\": null
+}
+
+Paso 2 — Tras confirmación:
+
+{
+  \"s\": \"ready\",
+  \"i\": \"note\",
+  \"a\": \"delete\",
+  \"target\": \"<id-nota>\",
+  \"obj\": {},
+  \"q\": null,
+  \"r\": \"He borrado la nota «...».\",
+  \"pending\": null,
+  \"ctx\": null
+}
+
+Reglas:
+
+1. **Jamás** devolvás **ready**/ **note**/ **delete** directamente sin **ask** previo con **pending.field** **delete_confirmation** — **incluso** si hay un único candidato técnico claro.
+2. Si no está claro qué nota borrar → **need_context** (**domain** **notes**, **query** **list_notes**, **filters** apropiados) o preguntá «¿Qué nota quieres borrar?».
+3. Si hay **varias candidatas** → **ask** con **pending.field** **target_selection**, **pending.original_action** **delete**, **pending.intent** **note**, **pending.candidates** lista con **id** y **label** (no UUIDs en **q**/**r**).
+4. Si **count = 0** → **answer** natural «No encuentro ninguna nota con esos datos.»
+5. **No** creés nota nueva si la intención es borrar.
+6. **No** usés **event**/**task** para borrar notas.
+
+Si **mode = continue** y **pending.field == delete_confirmation** y **pending.intent == note**:
+
+- Si **raw** confirma (sí, vale, adelante, bórrala, borra): **ready**/ **note**/ **delete** con **target** = **pending.target**.
+- Si **raw** cancela (no, cancela, déjala): **answer** natural «De acuerdo, no borro la nota.», **pending = null**.
+- **No** devolvás **note**/**create** ni **note**/**update** con «sí»/«no» cuando el hilo era **confirmación de borrado de nota**.
+
+Si **mode = continue** y **pending.field == target_selection** y **pending.intent == note** y **pending.original_action == delete**:
+
+- Interpretá **raw** como selección de candidata. Si queda claro el **target**, el **siguiente** paso es **ask** con **delete_confirmation** — **no** **ready**/**delete** inmediato.
+
+Ejemplo: «borra la nota de Aris» → **need_context** **notes**/**list_notes** → una nota → **ask** **delete_confirmation** → usuario «sí» → **ready** **note**/**delete** con **target**.
+
+
 BORRADO SEGURO DE EVENTOS / CITAS (acción destructiva):
 
 Si el usuario pide borrar, eliminar, quitar o cancelar una cita/evento/reunión:

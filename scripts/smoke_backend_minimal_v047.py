@@ -5527,6 +5527,268 @@ def smoke_35_note_update_basic() -> None:
     print("smoke 35 OK (note/update básico v0.47.37)")
 
 
+def smoke_36_note_delete_basic() -> None:
+    """v0.47.38 — borrado básico de notas con confirmación."""
+
+    # ── CASO A ── ask/delete pide confirmación; nota no se borra ─────────────────────
+    with tempfile.TemporaryDirectory() as d_a:
+        base = Path(d_a)
+        eng_a = _make_engine(base)
+        note_a = eng_a._notes.add_note(
+            {"title": "Aris", "content": "Contenido", "tags": ["Aris"]}
+        )
+        nid_a = str(note_a["id"])
+
+        r_a: dict[str, Any] = {
+            "s": "ask",
+            "i": "note",
+            "a": "delete",
+            "target": nid_a,
+            "obj": {},
+            "q": "¿Seguro que quieres borrar la nota «Aris»?",
+            "r": None,
+            "pending": {
+                "field": "delete_confirmation",
+                "target": nid_a,
+                "intent": "note",
+                "original_action": "delete",
+            },
+            "ctx": None,
+        }
+
+        with patch.object(engine_mod, "ask_gpt", return_value=r_a):
+            va, _, ua, _ = eng_a.process_message("borra la nota de Aris")
+
+        if ua is not None:
+            raise AssertionError(f"smoke36A no debe borrar {ua!r}")
+        # nota sigue
+        if not eng_a._notes.list_notes():
+            raise AssertionError("smoke36A nota debe seguir existiendo")
+        st_a = eng_a._thread_store.get_state()
+        if not st_a.get("open"):
+            raise AssertionError(f"smoke36A hilo abierto {st_a!r}")
+        if (st_a.get("pending") or {}).get("field") != "delete_confirmation":
+            raise AssertionError(f"smoke36A pending.field {st_a!r}")
+        if str((st_a.get("pending") or {}).get("target")) != nid_a:
+            raise AssertionError(f"smoke36A pending.target {st_a!r}")
+
+    # ── CASO B ── confirmación "sí" borra nota ────────────────────────────────────────
+    with tempfile.TemporaryDirectory() as d_b:
+        base = Path(d_b)
+        eng_b = _make_engine(base)
+        note_b = eng_b._notes.add_note({"title": "Aris", "content": "Contenido"})
+        nid_b = str(note_b["id"])
+
+        r_b_ask: dict[str, Any] = {
+            "s": "ask",
+            "i": "note",
+            "a": "delete",
+            "target": nid_b,
+            "obj": {},
+            "q": "¿Seguro que quieres borrar la nota «Aris»?",
+            "r": None,
+            "pending": {
+                "field": "delete_confirmation",
+                "target": nid_b,
+                "intent": "note",
+                "original_action": "delete",
+            },
+            "ctx": None,
+        }
+        r_b_ready: dict[str, Any] = {
+            "s": "ready",
+            "i": "note",
+            "a": "delete",
+            "target": nid_b,
+            "obj": {},
+            "q": None,
+            "r": "He borrado la nota «Aris».",
+            "pending": None,
+            "ctx": None,
+        }
+
+        seq_b = iter([r_b_ask, r_b_ready])
+
+        def fseq_b(_p: dict[str, Any]) -> dict[str, Any] | None:
+            return next(seq_b)
+
+        with patch.object(engine_mod, "ask_gpt", side_effect=fseq_b):
+            eng_b.process_message("borra la nota de Aris")
+            vb, _, ub, _ = eng_b.process_message("sí")
+
+        # nota borrada
+        if eng_b._notes.list_notes():
+            raise AssertionError("smoke36B nota debe haberse borrado")
+        if ub is not None:
+            raise AssertionError(f"smoke36B delete no devuelve objeto {ub!r}")
+        st_b = eng_b._thread_store.get_state()
+        if st_b.get("open"):
+            raise AssertionError(f"smoke36B hilo cerrado {st_b!r}")
+        lf_b = st_b.get("last_focus")
+        if isinstance(lf_b, dict) and str(lf_b.get("id")) == nid_b:
+            raise AssertionError(f"smoke36B last_focus no apunta a nota borrada {st_b!r}")
+        if (st_b.get("last_action") or {}).get("domain") != "note":
+            raise AssertionError(f"smoke36B last_action.domain note {st_b!r}")
+        if (st_b.get("last_action") or {}).get("action") != "delete":
+            raise AssertionError(f"smoke36B last_action.action delete {st_b!r}")
+
+    # ── CASO C ── cancelar no borra ───────────────────────────────────────────────────
+    with tempfile.TemporaryDirectory() as d_c:
+        base = Path(d_c)
+        eng_c = _make_engine(base)
+        note_c = eng_c._notes.add_note({"title": "Aris", "content": "Contenido"})
+        nid_c = str(note_c["id"])
+
+        r_c_ask: dict[str, Any] = {
+            "s": "ask",
+            "i": "note",
+            "a": "delete",
+            "target": nid_c,
+            "obj": {},
+            "q": "¿Seguro que quieres borrar la nota «Aris»?",
+            "r": None,
+            "pending": {
+                "field": "delete_confirmation",
+                "target": nid_c,
+                "intent": "note",
+                "original_action": "delete",
+            },
+            "ctx": None,
+        }
+        r_c_cancel: dict[str, Any] = {
+            "s": "answer",
+            "i": "note",
+            "a": "answer",
+            "target": None,
+            "obj": {},
+            "q": None,
+            "r": "De acuerdo, no borro la nota.",
+            "pending": None,
+            "ctx": None,
+        }
+
+        seq_c = iter([r_c_ask, r_c_cancel])
+
+        def fseq_c(_p: dict[str, Any]) -> dict[str, Any] | None:
+            return next(seq_c)
+
+        with patch.object(engine_mod, "ask_gpt", side_effect=fseq_c):
+            eng_c.process_message("borra la nota de Aris")
+            vc, _, uc, _ = eng_c.process_message("no")
+
+        if not eng_c._notes.list_notes():
+            raise AssertionError("smoke36C nota debe seguir existiendo")
+        st_c = eng_c._thread_store.get_state()
+        if st_c.get("open"):
+            raise AssertionError(f"smoke36C hilo cerrado {st_c!r}")
+        la_c = st_c.get("last_action")
+        if isinstance(la_c, dict) and la_c.get("action") == "delete":
+            raise AssertionError(f"smoke36C last_action no delete {st_c!r}")
+
+    # ── CASO D ── target inexistente ───────────────────────────────────────────────────
+    with tempfile.TemporaryDirectory() as d_d:
+        base = Path(d_d)
+        eng_d = _make_engine(base)
+
+        r_d: dict[str, Any] = {
+            "s": "ready",
+            "i": "note",
+            "a": "delete",
+            "target": "missing-note-id",
+            "obj": {},
+            "q": None,
+            "r": "He borrado la nota.",
+            "pending": None,
+            "ctx": None,
+        }
+
+        with patch.object(engine_mod, "ask_gpt", return_value=r_d):
+            vd, _, ud, _ = eng_d.process_message("borra la nota inexistente")
+
+        # Caso D puede llegar como confirmación (abre hilo) o como not found.
+        # Como el thread está vacío, el motor pide confirmación (flujo seguro).
+        # Lo importante es que NO borra.
+        if eng_d._notes.list_notes():
+            pass  # no hay notas de partida — OK
+        # last_action no debe haber cambiado a delete ejecutado
+        st_d = eng_d._thread_store.get_state()
+        la_d = st_d.get("last_action")
+        if isinstance(la_d, dict) and la_d.get("action") == "delete" and la_d.get("status") == "executed":
+            raise AssertionError(f"smoke36D last_action no debe ser delete ejecutado {st_d!r}")
+
+    # ── CASO E ── ready/delete directo sin confirmación no borra ──────────────────────
+    with tempfile.TemporaryDirectory() as d_e:
+        base = Path(d_e)
+        eng_e = _make_engine(base)
+        note_e = eng_e._notes.add_note({"title": "Aris", "content": "Contenido"})
+        nid_e = str(note_e["id"])
+
+        r_e: dict[str, Any] = {
+            "s": "ready",
+            "i": "note",
+            "a": "delete",
+            "target": nid_e,
+            "obj": {},
+            "q": None,
+            "r": "He borrado la nota.",
+            "pending": None,
+            "ctx": None,
+        }
+
+        with patch.object(engine_mod, "ask_gpt", return_value=r_e):
+            ve, _, ue, _ = eng_e.process_message("borra la nota de Aris")
+
+        # No debe borrar — debe pedir confirmación
+        if not eng_e._notes.list_notes():
+            raise AssertionError("smoke36E nota no debe haberse borrado sin confirmación")
+        st_e = eng_e._thread_store.get_state()
+        if not st_e.get("open"):
+            raise AssertionError(f"smoke36E hilo abierto (pidiendo confirmación) {st_e!r}")
+        if (st_e.get("pending") or {}).get("field") != "delete_confirmation":
+            raise AssertionError(f"smoke36E pending.field delete_confirmation {st_e!r}")
+
+    # ── CASO F ── varias candidatas → target_selection ────────────────────────────────
+    with tempfile.TemporaryDirectory() as d_f:
+        base = Path(d_f)
+        eng_f = _make_engine(base)
+        eng_f._notes.add_note({"title": "Aris v1", "content": "Primera nota"})
+        eng_f._notes.add_note({"title": "Aris v2", "content": "Segunda nota"})
+
+        r_f: dict[str, Any] = {
+            "s": "ask",
+            "i": "note",
+            "a": "delete",
+            "target": None,
+            "obj": {},
+            "q": "Tengo varias notas sobre Aris. ¿Cuál quieres borrar?",
+            "r": None,
+            "pending": {
+                "field": "target_selection",
+                "original_action": "delete",
+                "intent": "note",
+                "candidates": [{"id": "n1", "label": "Aris v1"}, {"id": "n2", "label": "Aris v2"}],
+            },
+            "ctx": None,
+        }
+
+        with patch.object(engine_mod, "ask_gpt", return_value=r_f):
+            vf, _, uf, _ = eng_f.process_message("borra la nota de Aris")
+
+        if uf is not None:
+            raise AssertionError(f"smoke36F no borra {uf!r}")
+        if len(eng_f._notes.list_notes()) != 2:
+            raise AssertionError("smoke36F ambas notas siguen")
+        st_f = eng_f._thread_store.get_state()
+        if not st_f.get("open"):
+            raise AssertionError(f"smoke36F hilo abierto {st_f!r}")
+        if (st_f.get("pending") or {}).get("field") != "target_selection":
+            raise AssertionError(f"smoke36F pending.field target_selection {st_f!r}")
+        if (st_f.get("pending") or {}).get("original_action") != "delete":
+            raise AssertionError(f"smoke36F pending.original_action delete {st_f!r}")
+
+    print("smoke 36 OK (note/delete básico v0.47.38)")
+
+
 def main() -> int:
     try:
         smoke_1_2_ambiguous_then_continue()
@@ -5561,6 +5823,7 @@ def main() -> int:
         smoke_33_event_minimal_identity_and_title_cleanup()
         smoke_34_robust_raw_reading_contract()
         smoke_35_note_update_basic()
+        smoke_36_note_delete_basic()
     except AssertionError as e:
         print(f"FAIL: {e}", file=sys.stderr)
         return 1

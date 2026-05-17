@@ -700,6 +700,8 @@ class ArisMinimalEngine:
                 return self._handle_ready_delete_event(result)
             if i == "task":
                 return self._handle_ready_delete_task(result)
+            if i == "note":
+                return self._handle_ready_delete_note(result)
             self._thread_store.clear_state()
             return (_MSG_UNSUPPORTED, "consulta", None, None)
 
@@ -807,6 +809,96 @@ class ArisMinimalEngine:
 
         self._record_successful_delete(domain="task", snapshot=dict(removed))
         return (_reply_del("He borrado la tarea."), "tarea", None, None)
+
+    def _handle_ready_delete_note(
+        self, result: dict[str, Any]
+    ) -> tuple[str, str, dict[str, Any] | None, str | None]:
+        """Borra una nota con confirmación previa obligatoria.
+
+        Si no se había pedido confirmación antes (thread vacío o pending distinto),
+        abre hilo ``delete_confirmation`` en lugar de borrar directamente.
+        """
+        r_raw = result.get("r")
+
+        def _reply_del(default: str) -> str:
+            if isinstance(r_raw, str):
+                cleaned = sanitize_visible_text(r_raw)
+                if cleaned:
+                    return cleaned
+            return default
+
+        tid = extract_event_target_id(result)
+        if not tid:
+            msg = "No sé qué nota quieres borrar. ¿Puedes concretarla?"
+            self._thread_store.save_state(
+                {
+                    "open": True,
+                    "intent": "note",
+                    "action": "delete",
+                    "object": {},
+                    "last_question": msg,
+                    "pending": {
+                        "field": "missing_target",
+                        "original_action": "delete",
+                    },
+                    "target": None,
+                }
+            )
+            return (msg, "ambiguo", None, None)
+
+        snap = next(
+            (n for n in self._notes.list_notes() if str(n.get("id")) == tid),
+            None,
+        )
+        if snap is None:
+            self._thread_store.clear_state()
+            return ("No encuentro esa nota en tu lista.", "consulta", None, None)
+
+        # Verificar que haya confirmación previa.
+        cur_state = self._thread_store.get_state()
+        pend = cur_state.get("pending") or {}
+        confirmed = (
+            cur_state.get("open")
+            and pend.get("field") == "delete_confirmation"
+            and str(pend.get("target") or "") == tid
+        )
+        if not confirmed:
+            label = str(snap.get("title") or "").strip()
+            if not label:
+                cnt = str(snap.get("content") or "").strip()
+                label = cnt[:40] if cnt else ""
+            q = (
+                f"¿Seguro que quieres borrar la nota «{label}»?"
+                if label
+                else "¿Seguro que quieres borrar esta nota?"
+            )
+            self._thread_store.save_state(
+                {
+                    "open": True,
+                    "intent": "note",
+                    "action": "delete",
+                    "object": {},
+                    "last_question": q,
+                    "pending": {
+                        "field": "delete_confirmation",
+                        "target": tid,
+                        "intent": "note",
+                        "original_action": "delete",
+                    },
+                    "target": tid,
+                }
+            )
+            return (q, "ambiguo", None, None)
+
+        removed = self._notes.delete_note(tid)
+        if removed is None:
+            self._thread_store.clear_state()
+            return ("No encuentro esa nota en tu lista.", "consulta", None, None)
+
+        self._record_successful_delete(domain="note", snapshot=dict(removed))
+        label_del = str(removed.get("title") or "").strip()
+        default_msg = f"He borrado la nota «{label_del}»." if label_del else "He borrado la nota."
+        return (_reply_del(default_msg), "nota", None, None)
 
     def _handle_ready_complete_task(
         self, result: dict[str, Any]
