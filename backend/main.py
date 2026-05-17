@@ -1,4 +1,4 @@
-"""API FastAPI mínima — Aris backend (POST /message → engine; PATCH tareas v0.47.31)."""
+"""API FastAPI mínima — Aris backend (POST /message → engine; POST/PATCH `/tasks`)."""
 
 from pathlib import Path
 from typing import Any
@@ -8,7 +8,12 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.core.engine import ArisMinimalEngine
-from backend.models.schemas import AssistantResponse, TaskToggleCompletedBody, UserMessage
+from backend.models.schemas import (
+    AssistantResponse,
+    TaskCreateBody,
+    TaskToggleCompletedBody,
+    UserMessage,
+)
 from backend.storage.events_store import EventsStore
 from backend.storage.notes_store import NotesStore
 from backend.storage.tasks_store import TasksStore
@@ -57,6 +62,24 @@ def list_events() -> list[dict[str, Any]]:
 @app.get("/tasks")
 def list_tasks() -> list[dict[str, Any]]:
     return tasks_store.list_tasks()
+
+
+@app.post("/tasks", status_code=201)
+def create_task(body: TaskCreateBody) -> dict[str, Any]:
+    """Crea una tarea sin GPT ni thread_state; sólo validación técnica y persistencia."""
+    payload: dict[str, Any] = {
+        "title": body.title,
+        "description": body.description,
+        "date_text": body.date_text,
+        "date_iso": body.date_iso,
+        "time_text": body.time_text,
+        "priority": body.priority,
+        "tags": body.tags if body.tags is not None else [],
+    }
+    try:
+        return tasks_store.add_task(payload)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
 
 
 @app.patch("/tasks/{task_id}")

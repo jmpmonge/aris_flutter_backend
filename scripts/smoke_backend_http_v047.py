@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smokes REST v0.47.31 — PATCH /tasks/{id} (solo `completed`). Sin OpenAI."""
+"""Smokes REST v0.47.33 — POST /tasks creación manual + PATCH completed (sin OpenAI)."""
 
 from __future__ import annotations
 
@@ -21,14 +21,107 @@ def main() -> int:
     with TemporaryDirectory() as d:
         base = Path(d)
         store = TasksStore(path=base / "tasks.json")
-        row = store.add_task({"title": "comprar leche", "date_text": "mañana"})
-        tid = str(row["id"])
 
         previous = main_mod.tasks_store
         main_mod.tasks_store = store
         try:
             client = TestClient(main_mod.app)
 
+            # --- POST CASO A: mínima ---
+            r_a = client.post("/tasks", json={"title": "comprar leche"})
+            if r_a.status_code not in (200, 201):
+                print(
+                    f"FAIL POST mínima: {r_a.status_code} {r_a.text}",
+                    file=sys.stderr,
+                )
+                return 1
+            ja = r_a.json()
+            if ja.get("title") != "comprar leche":
+                print(f"FAIL POST mínima title: {ja!r}", file=sys.stderr)
+                return 1
+            if ja.get("completed") is not False:
+                print(f"FAIL POST mínima completed: {ja!r}", file=sys.stderr)
+                return 1
+            if ja.get("priority") != "normal":
+                print(f"FAIL POST mínima priority: {ja!r}", file=sys.stderr)
+                return 1
+            if ja.get("tags") != []:
+                print(f"FAIL POST mínima tags: {ja!r}", file=sys.stderr)
+                return 1
+            if not str(ja.get("id") or "").strip():
+                print(f"FAIL POST mínima sin id: {ja!r}", file=sys.stderr)
+                return 1
+
+            # --- POST CASO B: completa ---
+            r_b = client.post(
+                "/tasks",
+                json={
+                    "title": "llamar al banco",
+                    "description": "preguntar por los seguros",
+                    "date_text": "mañana",
+                    "date_iso": "2026-05-18",
+                    "time_text": "10:00",
+                    "priority": "high",
+                    "tags": ["Banco", "Seguro"],
+                },
+            )
+            if r_b.status_code not in (200, 201):
+                print(
+                    f"FAIL POST completa: {r_b.status_code} {r_b.text}",
+                    file=sys.stderr,
+                )
+                return 1
+            jb = r_b.json()
+            want = {
+                "title": "llamar al banco",
+                "description": "preguntar por los seguros",
+                "date_text": "mañana",
+                "date_iso": "2026-05-18",
+                "time_text": "10:00",
+                "priority": "high",
+                "tags": ["Banco", "Seguro"],
+            }
+            for k, v in want.items():
+                if jb.get(k) != v:
+                    print(f"FAIL POST completa campo {k}: {jb!r}", file=sys.stderr)
+                    return 1
+            if jb.get("completed") is not False:
+                print(f"FAIL POST completa completed: {jb!r}", file=sys.stderr)
+                return 1
+
+            # --- POST CASO C: title vacío ---
+            r_c = client.post("/tasks", json={"title": ""})
+            if r_c.status_code not in (400, 422):
+                print(
+                    f"FAIL POST title vacío esperaba 400/422, fue {r_c.status_code}",
+                    file=sys.stderr,
+                )
+                return 1
+
+            # --- POST CASO D: priority inválida → normal ---
+            r_d = client.post(
+                "/tasks",
+                json={"title": "revisar informe", "priority": "medium"},
+            )
+            if r_d.status_code not in (200, 201):
+                print(
+                    f"FAIL POST priority medium: {r_d.status_code} {r_d.text}",
+                    file=sys.stderr,
+                )
+                return 1
+            if r_d.json().get("priority") != "normal":
+                print(f"FAIL POST priority normalizada: {r_d.json()!r}", file=sys.stderr)
+                return 1
+
+            if len(store.list_tasks()) != 3:
+                print(
+                    f"FAIL conteo tareas tras POSTs: esperaba 3, hay {len(store.list_tasks())}",
+                    file=sys.stderr,
+                )
+                return 1
+
+            # --- PATCH (regresión v0.47.31) ---
+            tid = str(ja["id"])
             r_ok = client.patch(f"/tasks/{tid}", json={"completed": True})
             if r_ok.status_code != 200:
                 print(
@@ -39,9 +132,6 @@ def main() -> int:
             j = r_ok.json()
             if str(j.get("id")) != tid or j.get("completed") is not True:
                 print(f"FAIL respuesta PATCH true: {j!r}", file=sys.stderr)
-                return 1
-            if len(store.list_tasks()) != 1:
-                print("FAIL no debe crear tareas nuevas", file=sys.stderr)
                 return 1
 
             r_off = client.patch(f"/tasks/{tid}", json={"completed": False})
