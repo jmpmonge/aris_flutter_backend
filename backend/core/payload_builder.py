@@ -80,17 +80,12 @@ def build_payload(raw_text: str, thread_state: dict[str, Any] | None) -> dict[st
             "target": thread_state.get("target"),
         }
         base["rules"] = {
-            "ambiguous_hour": "do_not_reopen_if_option_matches",
-            "continuation": "follow_thread_pending_resolve_then_ready_no_reask_hour",
             "hide_internal": True,
         }
     else:
         base["mode"] = "new"
         base["thread"] = None
         base["rules"] = {
-            "hours": "08:00-22:00",
-            "ambiguous_hour": "ask_closed_question",
-            "colloquial_hour_ambiguity": "never_ready_must_ask_with_options",
             "hide_internal": True,
         }
 
