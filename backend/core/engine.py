@@ -628,22 +628,41 @@ class ArisMinimalEngine:
         date_text = obj.get("date_text") or obj.get("date")
         time_text = obj.get("time_text") or obj.get("time")
 
-        return {
+        description: str | None = None
+        if obj.get("description") is not None:
+            ds = str(obj.get("description")).strip()
+            if ds:
+                description = ds
+
+        date_iso_store: str | None = None
+        if "date_iso" in obj or "dateISO" in obj:
+            date_iso_store = ArisMinimalEngine._coerce_date_iso_from_obj(obj)
+
+        priority_raw = obj.get("priority")
+        if priority_raw is None or str(priority_raw).strip() == "":
+            priority_eff = "normal"
+        else:
+            ps = str(priority_raw).strip().lower()
+            priority_eff = "high" if ps == "high" else "normal"
+
+        tags_for_store: list[str] = []
+        traw = obj.get("tags")
+        if isinstance(traw, list):
+            tags_for_store = [str(x).strip() for x in traw if str(x).strip()]
+
+        out: dict[str, Any] = {
             "title": title,
-            "description": (
-                str(obj["description"]).strip()
-                if obj.get("description") is not None
-                and str(obj.get("description")).strip()
-                else None
-            ),
+            "description": description,
             "date_text": str(date_text).strip() if date_text else None,
             "time_text": str(time_text).strip() if time_text else None,
-            "priority": (
-                str(obj["priority"]).strip()
-                if obj.get("priority") is not None and str(obj.get("priority")).strip()
-                else None
-            ),
+            "date_iso": date_iso_store,
+            "priority": priority_eff,
+            "tags": tags_for_store,
         }
+        for k in ("date_text", "time_text"):
+            if out.get(k) == "":
+                out[k] = None
+        return out
 
     @staticmethod
     def _note_payload(obj: dict[str, Any]) -> dict[str, Any] | None:

@@ -1,7 +1,7 @@
 """Resolución técnica de solicitudes de contexto estructuradas — sin semántica del raw del usuario.
 
 Calendar: **`events_*`** sólo igualan **date_text** / personas / tiempo almacenados (sin resolver calendarios).
-Tasks: **`list_tasks`** con filtros triviales opcionales (**completed**, **title** (subcadena **casefold** en título), **date**/**date_text**, **priority**) sin interpretación semántica extra.
+Tasks: **`list_tasks`** con filtros triviales opcionales (**completed**, **title** (subcadena **casefold** en título), **date**/**date_text**, **date_iso**, **priority**, **tag**/**tags**) sin interpretación semántica extra.
 Notes: **`list_notes`** con filtros triviales opcionales (**text**/**content**, **title**, **tag**/**tags**) sólo igualdad textual o subcadena (**casefold**) sin interpretación semántica.
 """
 
@@ -195,6 +195,20 @@ def _resolver_tareas_list(
                 continue
             if _norm_basico(tp) != _norm_basico(prio_f):
                 continue
+        iso_needle = filtros.get("date_iso")
+        if iso_needle is not None and str(iso_needle).strip() != "":
+            opt_needle = _opt_candidate_date_iso(iso_needle)
+            if opt_needle is None:
+                continue
+            t_iso = _opt_candidate_date_iso(t.get("date_iso"))
+            if t_iso != opt_needle:
+                continue
+        etiquetas_pedidas = _etiquetas_filtro_pedidas(filtros)
+        if etiquetas_pedidas and not _nota_etiquetas_coinciden(
+            t.get("tags"),
+            etiquetas_pedidas,
+        ):
+            continue
         out.append(t)
     return out
 
@@ -238,14 +252,31 @@ def _candidate_from_task(t: dict[str, Any]) -> dict[str, Any]:
         else None
     )
 
+    desc_raw = t.get("description")
+    description_out = (
+        str(desc_raw).strip()
+        if desc_raw is not None and str(desc_raw).strip()
+        else None
+    )
+
+    tags_out: list[str] = []
+    tr = t.get("tags")
+    if isinstance(tr, list):
+        tags_out = [str(x).strip() for x in tr if str(x).strip()]
+
+    di = _opt_candidate_date_iso(t.get("date_iso"))
+
     return {
         "id": eid,
         "label": label,
         "title": titulo or None,
+        "description": description_out,
         "date_text": dt,
+        "date_iso": di,
         "time_text": tm if tm else None,
-        "completed": bool(t.get("completed")),
         "priority": priority_out,
+        "tags": tags_out,
+        "completed": bool(t.get("completed")),
     }
 
 

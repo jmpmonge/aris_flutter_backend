@@ -2260,6 +2260,151 @@ def smoke_20_task_complete_basic() -> None:
     print("smoke 20 OK (complete tarea mock + need_context / selección)")
 
 
+def smoke_21_clean_task_card_contract() -> None:
+    """v0.47.32: crear tarea desde contrato GPT (ficha normalizada date_iso/tags/priority)."""
+
+    raw_user = "__smoke_clean_task_contract__"
+
+    # --- CASO A ---
+    r_a: dict[str, Any] = {
+        "s": "ready",
+        "i": "task",
+        "a": "create",
+        "obj": {
+            "title": "llamar al banco",
+            "description": "preguntar por los seguros",
+            "date": "mañana",
+            "date_iso": "2026-05-18",
+            "time": "10:00",
+            "priority": "normal",
+            "tags": ["Banco", "Seguro"],
+        },
+        "target": None,
+        "q": None,
+        "r": "He creado la tarea «llamar al banco».",
+        "pending": None,
+        "ctx": None,
+    }
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        engine = _make_engine(base)
+        with patch.object(engine_mod, "ask_gpt", return_value=r_a):
+            engine.process_message(raw_user)
+        ts = engine._tasks.list_tasks()
+        if len(ts) != 1:
+            raise AssertionError(f"smoke21A: una tarea, hay {len(ts)}")
+        task = ts[0]
+        if task.get("title") != "llamar al banco":
+            raise AssertionError(f"smoke21A title: {task!r}")
+        if task.get("description") != "preguntar por los seguros":
+            raise AssertionError(f"smoke21A description: {task!r}")
+        if str(task.get("date_text")) != "mañana":
+            raise AssertionError(f"smoke21A date_text: {task!r}")
+        if str(task.get("date_iso")) != "2026-05-18":
+            raise AssertionError(f"smoke21A date_iso: {task!r}")
+        if str(task.get("time_text")) != "10:00":
+            raise AssertionError(f"smoke21A time_text: {task!r}")
+        if task.get("priority") != "normal":
+            raise AssertionError(f"smoke21A priority: {task!r}")
+        if task.get("tags") != ["Banco", "Seguro"]:
+            raise AssertionError(f"smoke21A tags: {task!r}")
+        if task.get("completed") is not False:
+            raise AssertionError("smoke21A completed")
+        if engine._events.list_events() or engine._notes.list_notes():
+            raise AssertionError("smoke21A sin evento ni nota")
+
+    # --- CASO B ---
+    r_b: dict[str, Any] = {
+        "s": "ready",
+        "i": "task",
+        "a": "create",
+        "obj": {
+            "title": "enviar la solicitud",
+            "description": None,
+            "date": "mañana",
+            "date_iso": "2026-05-18",
+            "time": None,
+            "priority": "high",
+            "tags": [],
+        },
+        "target": None,
+        "q": None,
+        "r": "He creado la tarea «enviar la solicitud».",
+        "pending": None,
+        "ctx": None,
+    }
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        engine = _make_engine(base)
+        with patch.object(engine_mod, "ask_gpt", return_value=r_b):
+            engine.process_message(raw_user)
+        tb = engine._tasks.list_tasks()[0]
+        if tb.get("priority") != "high":
+            raise AssertionError(f"smoke21B priority: {tb!r}")
+
+    # --- CASO C ---
+    r_c: dict[str, Any] = {
+        "s": "ready",
+        "i": "task",
+        "a": "create",
+        "obj": {
+            "title": "comprar leche",
+            "priority": "normal",
+            "tags": [],
+        },
+        "target": None,
+        "q": None,
+        "r": "He creado la tarea «comprar leche».",
+        "pending": None,
+        "ctx": None,
+    }
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        engine = _make_engine(base)
+        with patch.object(engine_mod, "ask_gpt", return_value=r_c):
+            engine.process_message(raw_user)
+        tc = engine._tasks.list_tasks()[0]
+        if tc.get("title") != "comprar leche":
+            raise AssertionError(f"smoke21C title: {tc!r}")
+        if tc.get("priority") != "normal":
+            raise AssertionError(f"smoke21C priority: {tc!r}")
+        if tc.get("tags") != []:
+            raise AssertionError(f"smoke21C tags: {tc!r}")
+        if tc.get("date_text") is not None:
+            raise AssertionError(f"smoke21C date_text: {tc!r}")
+        if tc.get("date_iso") is not None:
+            raise AssertionError(f"smoke21C date_iso: {tc!r}")
+        if tc.get("time_text") is not None:
+            raise AssertionError(f"smoke21C time_text: {tc!r}")
+
+    # --- CASO D: prioridad inválida ---
+    r_d: dict[str, Any] = {
+        "s": "ready",
+        "i": "task",
+        "a": "create",
+        "obj": {
+            "title": "revisar informe",
+            "priority": "medium",
+            "tags": ["Trabajo"],
+        },
+        "target": None,
+        "q": None,
+        "r": "He creado la tarea «revisar informe».",
+        "pending": None,
+        "ctx": None,
+    }
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        engine = _make_engine(base)
+        with patch.object(engine_mod, "ask_gpt", return_value=r_d):
+            engine.process_message(raw_user)
+        td = engine._tasks.list_tasks()[0]
+        if td.get("priority") != "normal":
+            raise AssertionError(f"smoke21D priority normalizada: {td!r}")
+
+    print("smoke 21 OK (contrato limpio ficha de tarea v0.47.32)")
+
+
 def main() -> int:
     try:
         smoke_1_2_ambiguous_then_continue()
@@ -2279,6 +2424,7 @@ def main() -> int:
         smoke_18_clean_event_card_contract()
         smoke_19_continue_guard_no_note_task()
         smoke_20_task_complete_basic()
+        smoke_21_clean_task_card_contract()
     except AssertionError as e:
         print(f"FAIL: {e}", file=sys.stderr)
         return 1

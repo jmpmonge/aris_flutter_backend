@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,52 @@ from backend.storage.json_store import (
 
 def _backend_data_dir() -> Path:
     return Path(__file__).resolve().parent.parent / "data"
+
+
+_DATE_ISO_BASIC_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _normalize_task_date_iso(v: Any) -> str | None:
+    if v is None:
+        return None
+    s = str(v).strip()
+    if not s or not _DATE_ISO_BASIC_RE.match(s):
+        return None
+    try:
+        y = int(s[0:4])
+        mo = int(s[5:7])
+        d = int(s[8:10])
+    except ValueError:
+        return None
+    if y < 1970 or y > 2199 or mo < 1 or mo > 12 or d < 1 or d > 31:
+        return None
+    return s
+
+
+def _normalize_task_priority(v: Any) -> str:
+    if v is None:
+        return "normal"
+    s = str(v).strip().lower()
+    if s == "high":
+        return "high"
+    return "normal"
+
+
+def _normalize_task_tags(v: Any) -> list[str]:
+    if not isinstance(v, list):
+        return []
+    seen_cf: set[str] = set()
+    out: list[str] = []
+    for raw in v:
+        s = str(raw).strip()
+        if not s:
+            continue
+        cf = s.casefold()
+        if cf in seen_cf:
+            continue
+        seen_cf.add(cf)
+        out.append(s)
+    return out
 
 
 class TasksStore:
@@ -41,8 +88,10 @@ class TasksStore:
             "title": title,
             "description": self._opt_str(data.get("description")),
             "date_text": self._opt_str(data.get("date_text")),
+            "date_iso": _normalize_task_date_iso(data.get("date_iso")),
             "time_text": self._opt_str(data.get("time_text")),
-            "priority": self._opt_str(data.get("priority")),
+            "priority": _normalize_task_priority(data.get("priority")),
+            "tags": _normalize_task_tags(data.get("tags")),
             "completed": completed,
             "created_at": now,
             "updated_at": now,
@@ -78,8 +127,12 @@ class TasksStore:
             cur["date_text"] = self._opt_str(patch.get("date_text"))
         if "time_text" in patch:
             cur["time_text"] = self._opt_str(patch.get("time_text"))
+        if "date_iso" in patch:
+            cur["date_iso"] = _normalize_task_date_iso(patch.get("date_iso"))
         if "priority" in patch:
-            cur["priority"] = self._opt_str(patch.get("priority"))
+            cur["priority"] = _normalize_task_priority(patch.get("priority"))
+        if "tags" in patch:
+            cur["tags"] = _normalize_task_tags(patch.get("tags"))
         if "completed" in patch:
             cur["completed"] = bool(patch.get("completed"))
 
