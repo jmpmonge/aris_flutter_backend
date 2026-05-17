@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smokes REST — POST/PATCH /tasks + GET /events date_iso civil (sin OpenAI)."""
+"""Smokes REST — POST/PATCH/DELETE /tasks, DELETE /notes + GET /events (sin OpenAI)."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 
 import backend.main as main_mod
 from backend.storage.events_store import EventsStore
+from backend.storage.notes_store import NotesStore
 from backend.storage.tasks_store import TasksStore
 
 
@@ -22,6 +23,7 @@ def main() -> int:
     with TemporaryDirectory() as d:
         base = Path(d)
         store = TasksStore(path=base / "tasks.json")
+        notes_store = NotesStore(path=base / "notes.json")
         ev_tmp = EventsStore(path=base / "events.json")
         ev_tmp.add_event(
             {
@@ -34,8 +36,10 @@ def main() -> int:
         )
 
         prev_tasks = main_mod.tasks_store
+        prev_notes = main_mod.notes_store
         prev_events = main_mod.events_store
         main_mod.tasks_store = store
+        main_mod.notes_store = notes_store
         main_mod.events_store = ev_tmp
         try:
             client = TestClient(main_mod.app)
@@ -194,8 +198,66 @@ def main() -> int:
             if str(eo.get("time_text") or "") != "10:00":
                 print(f"FAIL GET /events time_text {eo!r}", file=sys.stderr)
                 return 1
+
+            # --- DELETE NOTA CASO A: nota existente ---
+            n_row = notes_store.add_note({"content": "nota de prueba smoke"})
+            n_id = str(n_row["id"])
+            r_del_note = client.delete(f"/notes/{n_id}")
+            if r_del_note.status_code != 200:
+                print(
+                    f"FAIL DELETE /notes existente: {r_del_note.status_code} {r_del_note.text}",
+                    file=sys.stderr,
+                )
+                return 1
+            jdn = r_del_note.json()
+            if not jdn.get("ok") or str(jdn.get("deleted", {}).get("id") or "") != n_id:
+                print(f"FAIL DELETE /notes respuesta: {jdn!r}", file=sys.stderr)
+                return 1
+            remaining_notes = client.get("/notes").json()
+            if any(str(n.get("id")) == n_id for n in remaining_notes):
+                print(f"FAIL DELETE /notes: nota sigue en GET /notes", file=sys.stderr)
+                return 1
+
+            # --- DELETE NOTA CASO B: nota inexistente ---
+            r_del_note_404 = client.delete("/notes/missing-id-00000")
+            if r_del_note_404.status_code != 404:
+                print(
+                    f"FAIL DELETE /notes inexistente esperaba 404, fue {r_del_note_404.status_code}",
+                    file=sys.stderr,
+                )
+                return 1
+
+            # --- DELETE TAREA CASO C: tarea existente ---
+            t_row = store.add_task({"title": "tarea de prueba smoke delete"})
+            t_del_id = str(t_row["id"])
+            r_del_task = client.delete(f"/tasks/{t_del_id}")
+            if r_del_task.status_code != 200:
+                print(
+                    f"FAIL DELETE /tasks existente: {r_del_task.status_code} {r_del_task.text}",
+                    file=sys.stderr,
+                )
+                return 1
+            jdt = r_del_task.json()
+            if not jdt.get("ok") or str(jdt.get("deleted", {}).get("id") or "") != t_del_id:
+                print(f"FAIL DELETE /tasks respuesta: {jdt!r}", file=sys.stderr)
+                return 1
+            remaining_tasks = client.get("/tasks").json()
+            if any(str(t.get("id")) == t_del_id for t in remaining_tasks):
+                print(f"FAIL DELETE /tasks: tarea sigue en GET /tasks", file=sys.stderr)
+                return 1
+
+            # --- DELETE TAREA CASO D: tarea inexistente ---
+            r_del_task_404 = client.delete("/tasks/missing-id-00000")
+            if r_del_task_404.status_code != 404:
+                print(
+                    f"FAIL DELETE /tasks inexistente esperaba 404, fue {r_del_task_404.status_code}",
+                    file=sys.stderr,
+                )
+                return 1
+
         finally:
             main_mod.tasks_store = prev_tasks
+            main_mod.notes_store = prev_notes
             main_mod.events_store = prev_events
 
     print("smoke_backend_http_v047: ALL OK")

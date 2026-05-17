@@ -96,6 +96,24 @@ def list_notes() -> list[dict[str, Any]]:
     return notes_store.list_notes()
 
 
+@app.delete("/notes/{note_id}")
+def delete_note(note_id: str) -> dict[str, Any]:
+    """Elimina una nota por id; sin GPT, sin thread_state."""
+    removed = notes_store.delete_note(note_id)
+    if removed is None:
+        raise HTTPException(status_code=404, detail="Not Found")
+    return {"ok": True, "deleted": removed}
+
+
+@app.delete("/tasks/{task_id}")
+def delete_task(task_id: str) -> dict[str, Any]:
+    """Elimina una tarea por id; sin GPT, sin thread_state."""
+    removed = tasks_store.delete_task(task_id)
+    if removed is None:
+        raise HTTPException(status_code=404, detail="Not Found")
+    return {"ok": True, "deleted": removed}
+
+
 @app.post("/message")
 def post_message(body: UserMessage) -> AssistantResponse:
     reply_text, _intent_type, _stored_payload, ui_hint = engine.process_message(body.text)
