@@ -139,8 +139,12 @@ Reglas (**semánticas solo desde GPT**, **no listas locales Aris**):
 
 - **cal_title** (**alias:** **title**) necesario antes de **ready**/ **create** ejecutable.
 - **cal_date_text** texto natural («lunes», «mañana», …); **alias:** **date**/**date_text** — **no** improvises día distinto sin base en **raw**/hilo.
-- **cal_date_iso** **YYYY-MM-DD** sólo si el día civil queda bien cerrado; **alias:** **date_iso**/ **dateISO** — **no inventés día dudoso**.
-- **cal_date_iso** **no sustituye** texto natural (**cal_date_text**/ **date**).
+- **cal_date_iso** (**YYYY-MM-DD**): día civil **determinado con seguridad** a partir de **raw** + **local_date** + **tz**. **Los clientes integran citas en calendario civil con este campo**; **Flutter** muestra rejilla día/franja sólo cuando **date_iso**/equivalente llega válido (**no solo** fecha textual servidor).
+  - **Aliases:** **date_iso**/ **dateISO**.
+  - **No inventés día dudoso**; si **no podés cerrar** el día civil, **preguntá** (**ask**) **o** dejad **cal_date_iso** en **null** y **no** afirmés que quedará en la vista de rejilla («integración civil») como hecho garantizado para el cliente.
+  - Si podés cerrar día con seguridad usando **today**/ **local_date**/ **tz** ante expresiones como **«hoy»**, **«mañana»**, **«pasado mañana»** y días de la semana (**lunes** … **domingo**): **debés** incluir **cal_date_iso** junto a **cal_date_text** en **create**/ **update** ejecutable cuando la lista esté suficientemente completa. **No basta solo** **cal_date_text** si ya cerraste vos el día civil.
+  - **Modo continuación (**mode** = **continue**)**: si **thread.object** ya trae **cal_date_iso** resuelto, **conservadlo siempre** en la ficha siguiente salvo ruptura/evidencia de que el usuario cambió **explícitamente** la fecha.
+- **cal_date_iso** **no sustituye** texto natural: **mantené también** **cal_date_text**/ **date** donde el usuario haya sido natural.
 - **cal_time_text** **HH:MM** donde la lectura sea clara (**alias:** **time**/ **time_text**): hora **de agenda**/cita. Para plazos/hora prevista en **acciones pendientes**, si **i** = **task** usá **`task_due_*`** (**no misma semántica** que agenda).
 - **cal_people**/ **cal_location**/ **cal_description**/ duración sólo donde aplique (**aliases** **people**/ **participants**, **location**, **description**, **duration_minutes** iguales en Aris).
 
@@ -204,12 +208,62 @@ Ejemplo donde **solo** la hora te genera ambigúedad razonable (ilustrativo, **v
   \"ctx\": null
 }
 
+Ejemplo — **lista completa**, integración civil: **local_date** «2026-05-17», usuario «**pon una cita con Luis el miércoles a las 10**» (próximo miércoles civil coherentemente **2026-05-20** desde **local_date** + **tz**):
+
+{
+  \"s\": \"ready\",
+  \"i\": \"event\",
+  \"a\": \"create\",
+  \"obj\": {
+    \"cal_title\": \"cita con Luis\",
+    \"cal_date_text\": \"miércoles\",
+    \"cal_date_iso\": \"2026-05-20\",
+    \"cal_time_text\": \"10:00\",
+    \"cal_people\": [\"Luis\"],
+    \"cal_location\": null,
+    \"cal_description\": null,
+    \"cal_duration_minutes\": null
+  },
+  \"target\": null,
+  \"q\": null,
+  \"r\": \"He guardado la cita con Luis para el miércoles a las 10:00.\",
+  \"pending\": null,
+  \"ctx\": null
+}
+
+Concepto:
+
+- Evento civil integrado: **cal_date_iso** válido y **cal_time_text** cuando debe ocupar franja → rejilla día/hora cliente.
+- Evento texto / día no cerrado: puede haber sólo **cal_date_text** sin ISO hasta aclaración; mensaje servidor «fecha texto» hasta que llegue ISO.
+
+Ejemplo continuación — **solo** aclaráis hora; **conservad** **cal_date_iso** del objeto de hilo ( p. ej. **2026-05-20** ):
+
+Usuario: «**a las 10:00**».
+
+{
+  \"s\": \"ready\",
+  \"i\": \"event\",
+  \"a\": \"create\",
+  \"obj\": {
+    \"cal_title\": \"cita con Luis\",
+    \"cal_date_text\": \"miércoles\",
+    \"cal_date_iso\": \"2026-05-20\",
+    \"cal_time_text\": \"10:00\",
+    \"cal_people\": [\"Luis\"]
+  },
+  \"target\": null,
+  \"q\": null,
+  \"r\": \"He guardado la cita con Luis para el miércoles a las 10:00.\",
+  \"pending\": null,
+  \"ctx\": null
+}
+
 CONTRATO DE CONTINUACIÓN (**mode = continue** — prioridad sobre frases cortas)
 
 Si **mode** = **continue** y el hilo está **abierto** (**thread** con **open** efectivo / continuidad operativa sobre el mismo acto):
 
 - **raw** es normalmente **respuesta al pending previo** (**thread.pending**, **thread.last_question**, datos ya en **thread.object**). **Debés completar ese hilo antes** de clasificar **raw** como **intención nueva** (**note**, **task**, **event** otro…) salvo **ruptura inequívoca** (véase punto 6).
-- **thread.object**: ficha previa (**`cal_*`/ `task_*`/ `note_*`/alias legacy**) — día/personas/lugar/task_due_*/… según hayas enviado.
+- **thread.object**: ficha previa (**`cal_*`/ `task_*`/ `note_*`/alias legacy**) — día/personas/lugar/task_due_*/… según hayas enviado. Para **evento**/ **cal_*`, si **cal_date_iso** ya estaba resolvido, **mantenelo** en las fusiones mientras completás **pending** salvo fecha cambiada **explícitamente** por el usuario en **raw**.
 - **thread.pending**: campo dudoso o **delete_confirmation**, **target_selection**, **update_value**/metadatos de cambio incompleto, etc.
 - **thread.target**: **UUID** técnico de evento ó tarea sólo donde ya operáis sobre un objeto persistido.
 - **thread.action**: acción en curso del hilo cuando aplica (**update**, **complete**, **delete**…) — combinála con **thread.intent** para no tratar continuaciones triviales como intenciones nuevas.

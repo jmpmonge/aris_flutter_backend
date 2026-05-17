@@ -3828,6 +3828,219 @@ def smoke_27_last_focus_last_action_and_no_false_success() -> None:
     print("smoke 27 OK (last_focus/last_action v0.47.36.4)")
 
 
+def smoke_28_calendar_event_requires_iso_for_civil_integration() -> None:
+    """v0.47.36.5 — eventos civiles persisten ``date_iso`` (cal_date_iso / alias)."""
+
+    pl_direct = ArisMinimalEngine._event_payload(
+        {
+            "cal_title": "comprobar iso",
+            "cal_date_text": "miércoles",
+            "cal_date_iso": "2026-05-20",
+            "cal_time_text": "10:00",
+            "cal_people": [],
+        }
+    )
+    if not pl_direct or pl_direct.get("date_iso") != "2026-05-20":
+        raise AssertionError(f"smoke28 direct payload {pl_direct!r}")
+
+    r_a: dict[str, Any] = {
+        "s": "ready",
+        "i": "event",
+        "a": "create",
+        "obj": {
+            "cal_title": "cita con Luis",
+            "cal_date_text": "miércoles",
+            "cal_date_iso": "2026-05-20",
+            "cal_time_text": "10:00",
+            "cal_people": ["Luis"],
+            "cal_location": None,
+            "cal_description": None,
+            "cal_duration_minutes": None,
+        },
+        "target": None,
+        "q": None,
+        "r": (
+            "He guardado la cita con Luis para el miércoles a las 10:00."
+        ),
+        "pending": None,
+        "ctx": None,
+    }
+
+    with tempfile.TemporaryDirectory() as d_a:
+        base = Path(d_a)
+        eng = _make_engine(base)
+        with patch.object(engine_mod, "ask_gpt", return_value=r_a):
+            _, _, evsaved, _ = eng.process_message("cita luis miércoles")
+        evs = eng._events.list_events()
+        if len(evs) != 1:
+            raise AssertionError(f"smoke28A count {evs!r}")
+        er = evs[0]
+        if str(er.get("title")) != "cita con Luis":
+            raise AssertionError(f"smoke28A title {er!r}")
+        if str(er.get("date_text")) != "miércoles":
+            raise AssertionError(f"smoke28A date_text {er!r}")
+        if str(er.get("date_iso") or "") != "2026-05-20":
+            raise AssertionError(f"smoke28A date_iso {er!r}")
+        if str(er.get("time_text") or "") != "10:00":
+            raise AssertionError(f"smoke28A time {er!r}")
+        if "Luis" not in list(er.get("participants") or []):
+            raise AssertionError(f"smoke28A people {er!r}")
+        st = eng._thread_store.get_state()
+        lf = st.get("last_focus")
+        la = st.get("last_action")
+        if not isinstance(lf, dict) or lf.get("domain") != "event":
+            raise AssertionError(f"smoke28A lf {lf!r}")
+        if not isinstance(la, dict) or la.get("domain") != "event":
+            raise AssertionError(f"smoke28A la {la!r}")
+
+    r_b1: dict[str, Any] = {
+        "s": "ask",
+        "i": "event",
+        "a": "create",
+        "obj": {
+            "cal_title": "cita con Luis",
+            "cal_date_text": "miércoles",
+            "cal_date_iso": "2026-05-20",
+            "cal_time_text": "10",
+            "cal_people": ["Luis"],
+        },
+        "target": None,
+        "q": "¿Te refieres a las 10:00 o a las 22:00?",
+        "r": None,
+        "pending": {"field": "time", "options": ["10:00", "22:00"]},
+        "ctx": None,
+    }
+    r_b2: dict[str, Any] = {
+        "s": "ready",
+        "i": "event",
+        "a": "create",
+        "obj": {
+            "cal_title": "cita con Luis",
+            "cal_date_text": "miércoles",
+            "cal_date_iso": "2026-05-20",
+            "cal_time_text": "10:00",
+            "cal_people": ["Luis"],
+        },
+        "target": None,
+        "q": None,
+        "r": (
+            "He guardado la cita con Luis para el miércoles a las 10:00."
+        ),
+        "pending": None,
+        "ctx": None,
+    }
+
+    with tempfile.TemporaryDirectory() as d_b:
+        base = Path(d_b)
+        eng = _make_engine(base)
+        seq_b = iter([r_b1, r_b2])
+
+        def fg_b(_p: dict[str, Any]) -> dict[str, Any] | None:
+            return next(seq_b)
+
+        with patch.object(engine_mod, "ask_gpt", side_effect=fg_b):
+            eng.process_message(
+                "pon una cita con Luis el miércoles a las 10"
+            )
+            sb1 = eng._thread_store.get_state()
+            if not sb1.get("open"):
+                raise AssertionError("smoke28B hilo debe abrir")
+            ob = sb1.get("object") or {}
+            if str(ob.get("cal_date_iso") or "") != "2026-05-20":
+                raise AssertionError(f"smoke28B objeto iso {ob!r}")
+
+            eng.process_message("a las 10:00")
+        eb = eng._events.list_events()
+        if len(eb) != 1:
+            raise AssertionError(f"smoke28B eventos {eb!r}")
+        br = eb[0]
+        if str(br.get("date_iso") or "") != "2026-05-20":
+            raise AssertionError(f"smoke28B date_iso tras create {br!r}")
+        if str(br.get("time_text")) != "10:00":
+            raise AssertionError(f"smoke28B time_text {br!r}")
+        if eng._thread_store.get_state().get("open"):
+            raise AssertionError("smoke28B hilo debe cerrarse")
+
+    r_cu: dict[str, Any] = {
+        "s": "ready",
+        "i": "event",
+        "a": "update",
+        "obj": {
+            "cal_date_text": "miércoles",
+            "cal_date_iso": "2026-05-20",
+            "cal_time_text": "10:00",
+        },
+        "target": "",
+        "q": None,
+        "r": "He actualizado la cita.",
+        "pending": None,
+        "ctx": None,
+    }
+
+    with tempfile.TemporaryDirectory() as d_c:
+        base = Path(d_c)
+        eng = _make_engine(base)
+        ev_old = eng._events.add_event(
+            {
+                "title": "reunión",
+                "date_text": "martes",
+                "date_iso": "2026-05-13",
+                "time_text": "09:00",
+                "participants": [],
+                "description": None,
+                "location": None,
+                "duration_minutes": None,
+            }
+        )
+        eid_u = str(ev_old["id"])
+        r_cu2 = dict(r_cu)
+        r_cu2["target"] = eid_u
+        with patch.object(engine_mod, "ask_gpt", return_value=r_cu2):
+            _, _, upc, _ = eng.process_message("ajusta fecha")
+        if upc is None:
+            raise AssertionError("smoke28C sin update")
+        if str(upc.get("date_text")) != "miércoles":
+            raise AssertionError(f"smoke28C date_text {upc!r}")
+        if str(upc.get("date_iso") or "") != "2026-05-20":
+            raise AssertionError(f"smoke28C date_iso {upc!r}")
+        if str(upc.get("time_text")) != "10:00":
+            raise AssertionError(f"smoke28C time_text {upc!r}")
+
+    r_d: dict[str, Any] = {
+        "s": "ready",
+        "i": "event",
+        "a": "create",
+        "obj": {
+            "title": "cita corta Luis",
+            "date_text": "miércoles",
+            "date_iso": "2026-05-20",
+            "time_text": "10:00",
+            "people": ["Luis"],
+        },
+        "target": None,
+        "q": None,
+        "r": "Ok.",
+        "pending": None,
+        "ctx": None,
+    }
+
+    with tempfile.TemporaryDirectory() as d_d:
+        base = Path(d_d)
+        eng = _make_engine(base)
+        with patch.object(engine_mod, "ask_gpt", return_value=r_d):
+            _, _, leg, _ = eng.process_message("legacy")
+        eds = eng._events.list_events()
+        if len(eds) != 1:
+            raise AssertionError(f"smoke28D {eds!r}")
+        dr = eds[0]
+        if str(dr.get("date_iso") or "") != "2026-05-20":
+            raise AssertionError(f"smoke28D iso {dr!r}")
+        if str(dr.get("time_text")) != "10:00":
+            raise AssertionError(f"smoke28D time {dr!r}")
+
+    print("smoke 28 OK (cal_date_iso civiles v0.47.36.5)")
+
+
 def main() -> int:
     try:
         smoke_1_2_ambiguous_then_continue()
@@ -3854,6 +4067,7 @@ def main() -> int:
         smoke_25_disable_hidden_recent_recovery()
         smoke_26_prefixed_domain_contract()
         smoke_27_last_focus_last_action_and_no_false_success()
+        smoke_28_calendar_event_requires_iso_for_civil_integration()
     except AssertionError as e:
         print(f"FAIL: {e}", file=sys.stderr)
         return 1

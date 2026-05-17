@@ -750,6 +750,16 @@ class ArisMinimalEngine:
             )
 
         updates = self._event_updates_from_obj(obj)
+        src_evt_iso_up = ArisMinimalEngine._coerce_date_iso_from_keys(
+            obj,
+            ("cal_date_iso", "date_iso", "dateISO"),
+        )
+        if (
+            src_evt_iso_up is not None
+            and updates.get("date_iso") is None
+        ):
+            updates = dict(updates)
+            updates["date_iso"] = src_evt_iso_up
         if not updates:
             self._thread_store.clear_state()
             return (
@@ -804,6 +814,18 @@ class ArisMinimalEngine:
 
         if i == "event":
             ev_payload = self._event_payload(obj)
+            if isinstance(ev_payload, dict):
+                src_evt_iso = ArisMinimalEngine._coerce_date_iso_from_keys(
+                    obj,
+                    ("cal_date_iso", "date_iso", "dateISO"),
+                )
+                # Parche técnico: **cal_date_iso**/alias presente válido debe terminar como **date_iso** en persistencia.
+                if (
+                    src_evt_iso is not None
+                    and ev_payload.get("date_iso") is None
+                ):
+                    ev_payload = dict(ev_payload)
+                    ev_payload["date_iso"] = src_evt_iso
             if ev_payload is None:
                 self._thread_store.clear_state()
                 return ("No he podido guardar el evento: falta un título.", "consulta", None, None)

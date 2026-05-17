@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smokes REST v0.47.33 — POST /tasks creación manual + PATCH completed (sin OpenAI)."""
+"""Smokes REST — POST/PATCH /tasks + GET /events date_iso civil (sin OpenAI)."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ if str(REPO) not in sys.path:
 from fastapi.testclient import TestClient
 
 import backend.main as main_mod
+from backend.storage.events_store import EventsStore
 from backend.storage.tasks_store import TasksStore
 
 
@@ -21,9 +22,21 @@ def main() -> int:
     with TemporaryDirectory() as d:
         base = Path(d)
         store = TasksStore(path=base / "tasks.json")
+        ev_tmp = EventsStore(path=base / "events.json")
+        ev_tmp.add_event(
+            {
+                "title": "smoke iso civil",
+                "date_text": "miércoles",
+                "date_iso": "2026-05-20",
+                "time_text": "10:00",
+                "participants": ["Luis"],
+            }
+        )
 
-        previous = main_mod.tasks_store
+        prev_tasks = main_mod.tasks_store
+        prev_events = main_mod.events_store
         main_mod.tasks_store = store
+        main_mod.events_store = ev_tmp
         try:
             client = TestClient(main_mod.app)
 
@@ -162,8 +175,28 @@ def main() -> int:
                     file=sys.stderr,
                 )
                 return 1
+
+            rev = client.get("/events")
+            if rev.status_code != 200:
+                print(
+                    f"FAIL GET /events: {rev.status_code} {rev.text}",
+                    file=sys.stderr,
+                )
+                return 1
+            evlist = rev.json()
+            if not isinstance(evlist, list) or len(evlist) != 1:
+                print(f"FAIL GET /events lista: {evlist!r}", file=sys.stderr)
+                return 1
+            eo = evlist[0]
+            if str(eo.get("date_iso") or "") != "2026-05-20":
+                print(f"FAIL GET /events date_iso ausente/mal {eo!r}", file=sys.stderr)
+                return 1
+            if str(eo.get("time_text") or "") != "10:00":
+                print(f"FAIL GET /events time_text {eo!r}", file=sys.stderr)
+                return 1
         finally:
-            main_mod.tasks_store = previous
+            main_mod.tasks_store = prev_tasks
+            main_mod.events_store = prev_events
 
     print("smoke_backend_http_v047: ALL OK")
     return 0
