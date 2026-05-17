@@ -1129,6 +1129,138 @@ def smoke_13_event_create_continue_not_update() -> None:
     print("smoke 13 OK (creación evento continúa como create tras hora pendiente)")
 
 
+def smoke_14_event_24h_time_and_weekday_text() -> None:
+    """v0.47.23: 17h lista → sin ask; día «lunes» persiste tras continuar desde 5↔17."""
+    r_direct: dict[str, Any] = {
+        "s": "ready",
+        "i": "event",
+        "a": "create",
+        "obj": {
+            "title": "cita con el médico",
+            "date": "lunes",
+            "time": "17:00",
+        },
+        "target": None,
+        "q": None,
+        "r": (
+            "He guardado la cita con el médico para el lunes "
+            "a las 17:00."
+        ),
+        "pending": None,
+        "ctx": None,
+    }
+
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        engine = _make_engine(base)
+        with patch.object(engine_mod, "ask_gpt", return_value=r_direct):
+            tv, _, _, _ = engine.process_message(
+                "cita con el médico el lunes a las 17h"
+            )
+        low = (tv or "").lower()
+        if "¿te refieres" in low:
+            raise AssertionError(f"smoke14A no debe preguntar: {tv!r}")
+        if "5:00" in (tv or "") or "05:00" in (tv or ""):
+            raise AssertionError(f"smoke14A no debe mezcla 5:00: {tv!r}")
+        evs = engine._events.list_events()
+        if len(evs) != 1:
+            raise AssertionError(f"smoke14A un evento: {evs!r}")
+        ev = evs[0]
+        if str(ev.get("title")) != "cita con el médico":
+            raise AssertionError(ev.get("title"))
+        dt = ev.get("date_text")
+        if str(dt) != "lunes":
+            raise AssertionError(f"smoke14A date_text debe lunes: {dt!r}")
+        if str(dt).lower() in ("domingo", "hoy"):
+            raise AssertionError(f"smoke14A date_text ilegal {dt!r}")
+        if str(ev.get("time_text")) != "17:00":
+            raise AssertionError(ev.get("time_text"))
+        if engine._tasks.list_tasks() or engine._notes.list_notes():
+            raise AssertionError("smoke14A sin tarea/nota")
+        if engine._thread_store.get_state().get("open"):
+            raise AssertionError("smoke14A hilo cerrado")
+
+    r_ask_amb: dict[str, Any] = {
+        "s": "ask",
+        "i": "event",
+        "a": "create",
+        "obj": {
+            "title": "cita con el médico",
+            "date": "lunes",
+            "time": "5",
+        },
+        "target": None,
+        "q": "¿Te refieres a las 5:00 o a las 17:00?",
+        "r": None,
+        "pending": {"field": "time", "options": ["05:00", "17:00"]},
+        "ctx": None,
+    }
+    r_continue: dict[str, Any] = {
+        "s": "ready",
+        "i": "event",
+        "a": "create",
+        "obj": {
+            "title": "cita con el médico",
+            "date": "lunes",
+            "time": "17:00",
+        },
+        "target": None,
+        "q": None,
+        "r": (
+            "He guardado la cita con el médico para el lunes "
+            "a las 17:00."
+        ),
+        "pending": None,
+        "ctx": None,
+    }
+
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        engine = _make_engine(base)
+        seq = iter([r_ask_amb, r_continue])
+
+        def fak(_p: dict[str, Any]) -> dict[str, Any] | None:
+            return next(seq)
+
+        with patch.object(engine_mod, "ask_gpt", side_effect=fak):
+            t1, _, _, _ = engine.process_message(
+                "cita con el médico el lunes a las 5"
+            )
+        low1 = (t1 or "").lower()
+        if "¿te refieres" not in low1:
+            raise AssertionError(f"smoke14B1 debe preguntar hora: {t1!r}")
+        if engine._events.list_events():
+            raise AssertionError("smoke14B1 sin evento antes")
+        st1 = engine._thread_store.get_state()
+        if not st1.get("open"):
+            raise AssertionError(st1)
+        ob = st1.get("object") or {}
+        if not isinstance(ob, dict) or ob.get("date") != "lunes":
+            raise AssertionError(f"smoke14B1 object.date lunes: {ob!r}")
+        if st1.get("target"):
+            raise AssertionError(f"smoke14B1 sin target UUID: {st1!r}")
+
+        with patch.object(engine_mod, "ask_gpt", return_value=r_continue):
+            t2, _, _, _ = engine.process_message("a las 17h")
+
+        msg_mod = "no sé qué evento quieres modificar"
+        if msg_mod in (t2 or "").lower():
+            raise AssertionError(f"smoke14B2: {t2!r}")
+
+        evs2 = engine._events.list_events()
+        if len(evs2) != 1:
+            raise AssertionError(evs2)
+        evb = evs2[0]
+        if str(evb.get("date_text")) != "lunes":
+            raise AssertionError(f"smoke14B2 date_text {evb.get('date_text')!r}")
+        if str(evb.get("time_text")) != "17:00":
+            raise AssertionError(evb.get("time_text"))
+        if engine._thread_store.get_state().get("open"):
+            raise AssertionError("cerrar hilo smoke14B")
+
+    print("smoke 14 OK (17h lista + día lunes estable)")
+
+
 def main() -> int:
     try:
         smoke_1_2_ambiguous_then_continue()
@@ -1141,6 +1273,7 @@ def main() -> int:
         smoke_11_task_query_basic()
         smoke_12_note_query_basic()
         smoke_13_event_create_continue_not_update()
+        smoke_14_event_24h_time_and_weekday_text()
     except AssertionError as e:
         print(f"FAIL: {e}", file=sys.stderr)
         return 1
