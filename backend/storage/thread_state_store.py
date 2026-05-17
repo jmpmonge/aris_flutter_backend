@@ -1,10 +1,8 @@
 """Estado de hilo conversacional — persistencia sin semántica.
 
-Contrato v0.47 (para empaquetar en GPT con mode=continue):
-open, intent, action, object, last_question, pending (y opcional target), last_recoverable (operación
-incompleta reciente si no hay hilo abierto), updated_at automático.
-
-Aris solo persiste estos campos; no reinterpreta contenido aquí.
+Contrato de hilo para **GPT** (**mode=continue**): cuando **open** es **true**, el
+motor persiste intent, action, object, last_question, pending y **target**.
+**updated_at** se actualiza al guardar. No se reenvían al modelo operaciones de turnos ya cerrados.
 """
 
 from __future__ import annotations
@@ -28,7 +26,6 @@ DEFAULT_THREAD_STATE: dict[str, Any] = {
     "last_question": None,
     "pending": None,
     "target": None,
-    "last_recoverable": None,
     "updated_at": None,
 }
 
@@ -53,7 +50,7 @@ class ThreadStateStore:
         prev = load_json_dict(self._path, {})
         if isinstance(prev, dict):
             for k, v in prev.items():
-                if k in DEFAULT_THREAD_STATE or k == "last_recoverable":
+                if k in DEFAULT_THREAD_STATE:
                     base[k] = v
         base.update(state)
         self._normalize_closed_fields(base)
@@ -67,15 +64,8 @@ class ThreadStateStore:
     def is_open(self) -> bool:
         return bool(self.get_state().get("open"))
 
-    def save_closed_with_recoverable(self, blob: dict[str, Any]) -> None:
-        """Cierra el hilo y persiste una operación incompleta reciente (**last_recoverable**)."""
-        self.save_state({"open": False, "last_recoverable": blob})
-
-    def clear_recoverable_only(self) -> None:
-        """Quita sólo ``last_recoverable`` preservando resto persistido."""
-        self.save_state({"last_recoverable": None})
-
     def _normalize_closed_fields(self, data: dict[str, Any]) -> None:
+        data.pop("last_recoverable", None)
         if not data.get("open"):
             data["intent"] = None
             data["action"] = None

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 import tempfile
@@ -18,7 +19,6 @@ import backend.core.engine as engine_mod
 from backend.core.engine import ArisMinimalEngine
 from backend.core.payload_builder import build_payload
 from backend.storage.events_store import EventsStore
-from backend.storage.json_store import utc_now_iso
 from backend.storage.notes_store import NotesStore
 from backend.storage.tasks_store import TasksStore
 from backend.storage.thread_state_store import ThreadStateStore
@@ -2996,7 +2996,7 @@ def normalize_target_from_state(st: dict[str, Any]) -> str | None:
 
 
 def smoke_24_recoverable_task_update_state() -> None:
-    """v0.47.36.1 — hilo incompleto en task/update y payload ``recent``."""
+    """Hilo incompleto en task/update (obj vacío, continuance, selección GPT). Sin ``recent`` en payload."""
     r_tpl_empty_patch: dict[str, Any] = {
         "s": "ready",
         "i": "task",
@@ -3084,76 +3084,6 @@ def smoke_24_recoverable_task_update_state() -> None:
         st_b_end = engine._thread_store.get_state()
         if st_b_end.get("open"):
             raise AssertionError("smoke24B hilo debe cerrarse")
-        if st_b_end.get("last_recoverable") is not None:
-            raise AssertionError("smoke24B recoverable limpio")
-
-    # --- CASO C: payload ``recent`` cuando no hay hilo ---
-    blob_template_c = {
-        "recoverable": True,
-        "intent": "task",
-        "action": "update",
-        "target": "",
-        "object": {"requested_field": "description"},
-        "pending": {"field": "description", "original_action": "update"},
-        "last_question": "¿Qué descripción?",
-        "reason": "missing_update_value",
-        "created_at": utc_now_iso(),
-    }
-    with tempfile.TemporaryDirectory() as d_c:
-        base = Path(d_c)
-        engine = _make_engine(base)
-        tbl = engine._tasks.add_task({"title": "llamar al banco"})
-        id_bc = str(tbl["id"])
-        blob_eff = dict(blob_template_c)
-        blob_eff["target"] = id_bc
-        engine._thread_store.save_closed_with_recoverable(blob_eff)
-        pl = build_payload(
-            "tienes que cambiar la tarea", engine._thread_store.get_state()
-        )
-        if pl.get("mode") != "new":
-            raise AssertionError(f"smoke24C mode {pl!r}")
-        if pl.get("thread") is not None:
-            raise AssertionError(f"smoke24C thread {pl!r}")
-        rec = pl.get("recent")
-        if not isinstance(rec, dict) or rec.get("recoverable") is not True:
-            raise AssertionError(f"smoke24C recent {pl!r}")
-        if rec.get("intent") != "task" or rec.get("action") != "update":
-            raise AssertionError(f"smoke24C recent ia {rec!r}")
-        if rec.get("target") != id_bc:
-            raise AssertionError(f"smoke24C target {rec!r}")
-
-    # --- CASO D: ``recent`` omitido si hilo abierto ---
-    lr_d = {
-        "recoverable": True,
-        "intent": "task",
-        "action": "update",
-        "target": "aaaaaaaa-bbbb-4ccc-dddd-eeeeeeeeeeee",
-        "object": {},
-        "pending": {},
-        "last_question": "x",
-        "reason": "test",
-        "created_at": utc_now_iso(),
-    }
-    with tempfile.TemporaryDirectory() as d_d:
-        base = Path(d_d)
-        engine = _make_engine(base)
-        engine._thread_store.save_state({"open": False, "last_recoverable": lr_d})
-        engine._thread_store.save_state(
-            {
-                "open": True,
-                "intent": "task",
-                "action": "complete",
-                "object": {},
-                "last_question": "¿?",
-                "pending": None,
-                "target": None,
-            }
-        )
-        pl_d = build_payload("__d__", engine._thread_store.get_state())
-        if pl_d.get("mode") != "continue":
-            raise AssertionError(f"smoke24D mode {pl_d!r}")
-        if pl_d.get("recent") is not None:
-            raise AssertionError(f"smoke24D recent {pl_d!r}")
 
     # --- CASOS E + F: selección única sin lista + siguiente turno ejecuta ---
     q_desc = (
@@ -3247,7 +3177,176 @@ def smoke_24_recoverable_task_update_state() -> None:
         if engine._thread_store.get_state().get("open"):
             raise AssertionError("smoke24F cerrado")
 
-    print("smoke 24 OK (operaciones task/update recuperables v0.47.36.1)")
+    print("smoke 24 OK (task/update incompleto y continuación)")
+
+
+def smoke_25_disable_hidden_recent_recovery() -> None:
+    """v0.47.36.2 — sin ``recent`` en payload; no contaminación ``mode=new``."""
+    from backend.storage.json_store import load_json_dict
+
+    stale: dict[str, Any] = {
+        "open": False,
+        "last_recoverable": {
+            "recoverable": True,
+            "intent": "task",
+            "action": "update",
+            "target": "old-id",
+            "object": {"priority": "high"},
+            "pending": {"field": "missing_target"},
+        },
+    }
+    pl_a = build_payload("crea una tarea para ir al banco el lunes", stale)
+    if pl_a.get("mode") != "new":
+        raise AssertionError(f"smoke25A mode {pl_a!r}")
+    if pl_a.get("thread") is not None:
+        raise AssertionError(f"smoke25A thread {pl_a!r}")
+    if "recent" in pl_a:
+        raise AssertionError(f"smoke25A recent key {pl_a!r}")
+
+    r_create: dict[str, Any] = {
+        "s": "ready",
+        "i": "task",
+        "a": "create",
+        "obj": {
+            "title": "ir al banco",
+            "date": "lunes",
+            "date_iso": "2026-05-18",
+            "priority": "normal",
+            "tags": ["Banco"],
+        },
+        "target": None,
+        "q": None,
+        "r": "He creado la tarea «ir al banco» para el lunes.",
+        "pending": None,
+        "ctx": None,
+    }
+
+    # --- CASO B: alta nueva no se contamina por JSON viejo ---
+    stale_blob = stale["last_recoverable"].copy()
+    stale_blob["target"] = "aaaaaaaa-bbbb-4ccc-dddd-eeeeeeeeeeee"
+    with tempfile.TemporaryDirectory() as td_b:
+        base = Path(td_b)
+        tpath = base / "thread_state.json"
+        tpath.parent.mkdir(parents=True, exist_ok=True)
+        tpath.write_text(
+            json.dumps({"open": False, "last_recoverable": stale_blob}),
+            encoding="utf-8",
+        )
+        engine = _make_engine(base)
+        with patch.object(engine_mod, "ask_gpt", return_value=r_create):
+            vis, _, created, _ = engine.process_message(
+                "crea una tarea para ir al banco el lunes"
+            )
+        if created is None or str(created.get("title") or "") != "ir al banco":
+            raise AssertionError(f"smoke25B tarea {created!r}")
+        if str(created.get("date_text") or "").lower() != "lunes":
+            raise AssertionError(f"smoke25B date_text {created!r}")
+        tl = (vis or "").lower()
+        if "¿te refieres" in tl or "prioridad" in tl and "alta" in tl:
+            raise AssertionError(f"smoke25B texto contaminado {vis!r}")
+        if engine._thread_store.get_state().get("open"):
+            raise AssertionError("smoke25B debe cerrarse")
+        raw_ts = load_json_dict(tpath, {})
+        lr = raw_ts.get("last_recoverable")
+        if lr is not None and lr != {}:
+            raise AssertionError(f"smoke25B archivo sin recoverable limpio {raw_ts!r}")
+
+    ib = "11111111-2222-4333-a444-555555555555"
+    q_banco = (
+        "¿Qué descripción quieres ponerle a la tarea «llamar al banco»?"
+    )
+    st_continue: dict[str, Any] = {
+        "open": True,
+        "intent": "task",
+        "action": "update",
+        "target": ib,
+        "object": {"requested_field": "description"},
+        "last_question": q_banco,
+        "pending": {
+            "field": "description",
+            "target": ib,
+            "original_action": "update",
+        },
+    }
+    pl_c = build_payload("preguntar por los seguros", st_continue)
+    if pl_c.get("mode") != "continue":
+        raise AssertionError(f"smoke25C mode {pl_c!r}")
+    th_c = pl_c.get("thread")
+    if not isinstance(th_c, dict):
+        raise AssertionError(f"smoke25C thread {pl_c!r}")
+    if th_c.get("target") != ib:
+        raise AssertionError(f"smoke25C target {th_c!r}")
+    pend_c = th_c.get("pending") or {}
+    if pend_c.get("field") != "description":
+        raise AssertionError(f"smoke25C pending {pend_c!r}")
+    if "recent" in pl_c:
+        raise AssertionError(f"smoke25C recent {pl_c!r}")
+
+    r_tpl_empty: dict[str, Any] = {
+        "s": "ready",
+        "i": "task",
+        "a": "update",
+        "obj": {},
+        "target": "",
+        "q": None,
+        "r": None,
+        "pending": None,
+        "ctx": None,
+    }
+    with tempfile.TemporaryDirectory() as td_d:
+        base = Path(td_d)
+        engine = _make_engine(base)
+        tb = engine._tasks.add_task({"title": "llamar al banco"})
+        idb = str(tb["id"])
+        r_d = dict(r_tpl_empty)
+        r_d["target"] = idb
+        with patch.object(engine_mod, "ask_gpt", return_value=r_d):
+            td1, _, _, _ = engine.process_message("turno vacuum obj")
+        if "qué quieres cambiar" not in (td1 or "").lower():
+            raise AssertionError(f"smoke25D: {td1!r}")
+        st_d = engine._thread_store.get_state()
+        if not st_d.get("open"):
+            raise AssertionError(f"smoke25D cerrado {st_d!r}")
+        pend_d = st_d.get("pending") or {}
+        if pend_d.get("field") != "update_value":
+            raise AssertionError(f"smoke25D pend {pend_d!r}")
+
+    bad_tgt = "99999999-aaaa-4bbb-bccc-dddddddddddd"
+    r_fail: dict[str, Any] = {
+        "s": "ready",
+        "i": "task",
+        "a": "update",
+        "obj": {"priority": "high"},
+        "target": bad_tgt,
+        "q": None,
+        "r": None,
+        "pending": None,
+        "ctx": None,
+    }
+    with tempfile.TemporaryDirectory() as td_e:
+        base = Path(td_e)
+        engine = _make_engine(base)
+        with patch.object(engine_mod, "ask_gpt", return_value=r_fail):
+            te, _, _, _ = engine.process_message("sube prioridad falsa")
+        if "No encuentro" not in (te or ""):
+            raise AssertionError(f"smoke25E msg {te!r}")
+        if engine._thread_store.get_state().get("open"):
+            raise AssertionError("smoke25E cerrado")
+
+        tpl = load_json_dict(base / "thread_state.json", {})
+        if tpl.get("last_recoverable") not in (None, {}):
+            raise AssertionError(f"smoke25E recoverable archivo {tpl!r}")
+
+        pl_e2 = build_payload(
+            "crea una tarea para ir al banco el lunes",
+            engine._thread_store.get_state(),
+        )
+        if "recent" in pl_e2:
+            raise AssertionError(f"smoke25E recent {pl_e2!r}")
+        if pl_e2.get("mode") != "new":
+            raise AssertionError(f"smoke25E mode2 {pl_e2!r}")
+
+    print("smoke 25 OK (recent oculto desactivado v0.47.36.2)")
 
 
 def main() -> int:
@@ -3273,6 +3372,7 @@ def main() -> int:
         smoke_22_task_delete_safe()
         smoke_23_task_update_basic()
         smoke_24_recoverable_task_update_state()
+        smoke_25_disable_hidden_recent_recovery()
     except AssertionError as e:
         print(f"FAIL: {e}", file=sys.stderr)
         return 1

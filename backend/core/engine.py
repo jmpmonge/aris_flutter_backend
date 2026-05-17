@@ -12,12 +12,10 @@ from backend.core.payload_builder import (
     build_payload,
     extract_event_target_id,
     normalize_gpt_response,
-    normalize_target_id,
     sanitize_visible_text,
 )
 from backend.storage.events_store import EventsStore
 from backend.storage.notes_store import NotesStore
-from backend.storage.json_store import utc_now_iso
 from backend.storage.tasks_store import TasksStore
 from backend.storage.thread_state_store import ThreadStateStore
 
@@ -179,17 +177,13 @@ class ArisMinimalEngine:
             return (reply or "¿Puedes concretar?", "ambiguo", None, None)
 
         if s == "answer":
-            st0 = self._thread_store.get_state()
-            if not self._maybe_stash_open_task_as_recoverable(st0):
-                self._thread_store.clear_state()
+            self._thread_store.clear_state()
             r = result["r"]
             reply = sanitize_visible_text(r) if isinstance(r, str) else ""
             return (reply or _MSG_OK, "consulta", None, None)
 
         if s == "fail":
-            st0 = self._thread_store.get_state()
-            if not self._maybe_stash_open_task_as_recoverable(st0):
-                self._thread_store.clear_state()
+            self._thread_store.clear_state()
             r = result["r"]
             reply = sanitize_visible_text(r) if isinstance(r, str) else ""
             return (reply or _MSG_FAIL_FALLBACK, "consulta", None, None)
@@ -439,74 +433,6 @@ class ArisMinimalEngine:
             return f"¿Qué etiquetas quieres ponerle a {noun}?"
         return "¿Qué quieres cambiar de esa tarea?"
 
-    def _recoverable_blob_task_update(
-        self,
-        *,
-        tid: str | None,
-        obj: dict[str, Any],
-        pending: dict[str, Any],
-        last_q: str,
-        reason: str,
-    ) -> dict[str, Any]:
-        return {
-            "recoverable": True,
-            "intent": "task",
-            "action": "update",
-            "target": tid,
-            "object": dict(obj),
-            "pending": dict(pending),
-            "last_question": last_q,
-            "reason": reason,
-            "created_at": utc_now_iso(),
-        }
-
-    def _should_track_open_task_as_recoverable(self, st: dict[str, Any]) -> bool:
-        if not isinstance(st, dict):
-            return False
-        if not st.get("open"):
-            return False
-        if str(st.get("intent") or "").strip().lower() != "task":
-            return False
-        act = str(st.get("action") or "").strip().lower()
-        pend = st.get("pending") if isinstance(st.get("pending"), dict) else {}
-        oo = pend.get("original_action")
-        pf = pend.get("field")
-        pend_o = (
-            isinstance(oo, str) and str(oo).strip().lower() == "update"
-        )
-        pend_flds = pend_o or (
-            isinstance(pf, str)
-            and str(pf).strip().lower()
-            in {
-                "update_value",
-                "description",
-                "title",
-                "date",
-                "time",
-                "tags",
-                "missing_target",
-            }
-        )
-        return act == "update" or pend_o or pend_flds
-
-    def _maybe_stash_open_task_as_recoverable(self, st: dict[str, Any]) -> bool:
-        """Cierra guardando recoverable sólo ante **answer**/**fail** si había actualización incompleta."""
-        if self._should_track_open_task_as_recoverable(st):
-            blob = self._recoverable_blob_task_update(
-                tid=normalize_target_id(st.get("target")),
-                obj=dict(st["object"]) if isinstance(st.get("object"), dict) else {},
-                pending=(
-                    dict(st["pending"])
-                    if isinstance(st.get("pending"), dict)
-                    else {}
-                ),
-                last_q=str(st.get("last_question") or "").strip(),
-                reason="interaction_closed_without_execute",
-            )
-            self._thread_store.save_closed_with_recoverable(blob)
-            return True
-        return False
-
     def _handle_ready_update_task(
         self, result: dict[str, Any]
     ) -> tuple[str, str, dict[str, Any] | None, str | None]:
@@ -551,44 +477,21 @@ class ArisMinimalEngine:
                 )
                 return (msg, "ambiguo", None, None)
 
-            blob = self._recoverable_blob_task_update(
-                tid=None,
-                obj=dict(obj),
-                pending={
-                    "field": "missing_target",
-                    "original_action": "update",
-                },
-                last_q=(
-                    "No sé qué tarea quieres modificar ni qué quieres cambiar. "
-                    "¿Puedes concretarlo?"
-                ),
-                reason="missing_target_and_updates",
+            msg_empty = (
+                "No sé qué tarea quieres modificar ni qué quieres cambiar. "
+                "¿Puedes concretarlo?"
             )
-            self._thread_store.save_closed_with_recoverable(blob)
-            reply = sanitize_visible_text(blob["last_question"])
-            return (reply, "consulta", None, None)
+            self._thread_store.clear_state()
+            return (msg_empty, "consulta", None, None)
 
         cur = next(
             (t for t in self._tasks.list_tasks() if str(t.get("id")) == tid),
             None,
         )
         if cur is None:
-            blob_nf = self._recoverable_blob_task_update(
-                tid=tid,
-                obj=dict(obj),
-                pending={
-                    "field": "missing_target",
-                    "target": tid,
-                    "original_action": "update",
-                },
-                last_q=(
-                    "No encuentro esa tarea en tu lista."
-                ),
-                reason="task_not_found",
-            )
-            self._thread_store.save_closed_with_recoverable(blob_nf)
+            self._thread_store.clear_state()
             return (
-                sanitize_visible_text(blob_nf["last_question"]),
+                "No encuentro esa tarea en tu lista.",
                 "consulta",
                 None,
                 None,
@@ -621,35 +524,11 @@ class ArisMinimalEngine:
         try:
             updated = self._tasks.update_task(tid, updates_eff)
         except ValueError:
-            blob_err = self._recoverable_blob_task_update(
-                tid=tid,
-                obj=dict(obj),
-                pending={
-                    "field": "update_value",
-                    "target": tid,
-                    "original_action": "update",
-                },
-                last_q=(
-                    "No he podido actualizar esa tarea."
-                ),
-                reason="value_error",
-            )
-            self._thread_store.save_closed_with_recoverable(blob_err)
+            self._thread_store.clear_state()
             return ("No he podido actualizar esa tarea.", "consulta", None, None)
 
         if updated is None:
-            blob_err = self._recoverable_blob_task_update(
-                tid=tid,
-                obj=dict(obj),
-                pending={
-                    "field": "update_value",
-                    "target": tid,
-                    "original_action": "update",
-                },
-                last_q="No he podido actualizar esa tarea.",
-                reason="store_update_failed",
-            )
-            self._thread_store.save_closed_with_recoverable(blob_err)
+            self._thread_store.clear_state()
             return ("No he podido actualizar esa tarea.", "consulta", None, None)
 
         self._thread_store.clear_state()

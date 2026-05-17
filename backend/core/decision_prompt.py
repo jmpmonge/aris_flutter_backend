@@ -501,47 +501,10 @@ Ejemplo **need_context** → una fila → **ready**:
   \"ctx\": null
 }
 
-**Continuaciones con Aris incompleta (v0.47.36.1)**
+**Continuaciones con Aris incompleta (v0.47.36)**
 
 - **`mode** = **continue** con **`thread.action`** **`update`**, **`thread.intent`** **`task`** y **`thread.pending.field`** tipo **`missing_target`** o **`pending.field`** (**description**/ **update_value**/…): tratá **`raw`** como aclaración de **qué fila persistida** debe recibir cambios antes de lanzar cualquier **`ready`/update ejecutable**.
 - Si **`pending.field`** es **`update_value`**, **`description`**, **`date`**… y ya hay **`target`**: el siguiente **`ready`/update ejecutable debe traer campo concreto** en **`obj`** (p. ej. **description**) — esa réplica del usuario vale como valor.
-
-OPERACIÓN RECIENTE RECUPERABLE (**campo** **recent**, **mode** = **new**)
-
-Cuando **no** hay **hilo** activo (**open** efectivo cerrado desde Aris) pero llega **`recent.recoverable` = true**:
-
-- **`recent`** **no obliga**, es **solo** huella técnica de una operación **incompleta** antes de ejecutar.
-- **No** cites **recent**, ni **recoverable**, ni jergas internas.
-- Si **`raw`** parece **continuar**/ **remendar**/ **insistir** sobre ese acto incompleto, **priorizá esa lectura**.
-- Ejemplos posibles (orientativos) donde tiene sentido alinear **`raw`** con **recent**: «tienes que cambiar la tarea», «la del banco», «ponle esta descripción», texto que encaja **`recent.object`** (**requested_field**, etc.).
-
-Si **`raw`** es **petición nueva clara**:
-
-- («creá una tarea nueva…», «qué citas hay mañana», «guarda una nota…»…) → **Ignorá** **recent** y seguí ese marco.
-
-Si **hay duda** entre **recent** vs **intención nueva**, **preguntá** («¿Seguimos con cambiar …? ») antes de ejecutar cualquier **`ready`**.
-
-Ejemplo:
-
-**recent** (ejemplo técnico, sin mostrar así al usuario):
-
-{
-  "recoverable": true,
-  "intent": "task",
-  "action": "update",
-  "target": "<uuid técnico interno sólo>",
-  "object": {"requested_field": "description"},
-  "pending": {"field": "description", "original_action": "update"},
-  "reason": "..."
-}
-
-Usuario: «preguntar por los seguros vinculados»
-
-→ **`ready`**, **`i`** task, **`a` update**, **`target`** ese uuid, **`obj`**: {\"description\":\"preguntar por los seguros vinculados\"}, **`r`** visible natural.
-
-Usuario: «tienes que cambiar la tarea» cuando **recent** marca **missing description**
-
-→ típico **`ask`**, **`i`** task, **`a` update**, **`target`** igual, **`pending`**: {\"field\":\"description\",\"original_action\":\"update\"}, **`q`** pidiendo nuevo texto (**sin IDs**).
 
 
 CREACIÓN DE NOTAS (sin decisión local en Aris: vos clasificás; Aris guarda texto estructurado):
