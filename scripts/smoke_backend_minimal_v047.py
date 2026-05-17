@@ -5150,6 +5150,134 @@ def smoke_33_event_minimal_identity_and_title_cleanup() -> None:
     print("smoke 33 OK (identidad mínima y título limpio v0.47.36.10)")
 
 
+def smoke_34_robust_raw_reading_contract() -> None:
+    """v0.47.36.11 — corrección obvia crea evento; corrección dudosa abre hilo."""
+
+    # ── CASO A ── corrección obvia → GPT devuelve ready/create directamente ─────────
+    r_a: dict[str, Any] = {
+        "s": "ready",
+        "i": "event",
+        "a": "create",
+        "obj": {
+            "cal_title": "cita con Luis",
+            "cal_date_text": "martes",
+            "cal_date_iso": "2026-05-19",
+            "cal_time_text": "14:00",
+            "cal_people": ["Luis"],
+        },
+        "target": None,
+        "q": None,
+        "r": "He guardado la cita con Luis para el martes a las 14:00.",
+        "pending": None,
+        "ctx": None,
+    }
+
+    with tempfile.TemporaryDirectory() as d_a:
+        base = Path(d_a)
+        eng_a = _make_engine(base)
+
+        with patch.object(engine_mod, "ask_gpt", return_value=r_a):
+            va, _, sa, _ = eng_a.process_message(
+                "cita para el martes a la 14h co luis"
+            )
+
+        if sa is None:
+            raise AssertionError("smoke34A debe crear evento")
+        if str(sa.get("title")) != "cita con Luis":
+            raise AssertionError(f"smoke34A title {sa!r}")
+        if str(sa.get("time_text")) != "14:00":
+            raise AssertionError(f"smoke34A time_text {sa!r}")
+        if sa.get("participants") != ["Luis"]:
+            raise AssertionError(f"smoke34A participants {sa!r}")
+
+    # ── CASO B ── corrección dudosa → GPT devuelve ask con raw_correction_confirmation
+    r_b: dict[str, Any] = {
+        "s": "ask",
+        "i": "event",
+        "a": "create",
+        "obj": {
+            "cal_title": "cita con Luis",
+            "cal_time_text": "20:00",
+            "cal_people": ["Luis"],
+        },
+        "target": None,
+        "q": "¿Te refieres a una cita con Luis para el martes a las 20:00?",
+        "r": None,
+        "pending": {"field": "raw_correction_confirmation"},
+        "ctx": None,
+    }
+
+    with tempfile.TemporaryDirectory() as d_b:
+        base = Path(d_b)
+        eng_b = _make_engine(base)
+
+        with patch.object(engine_mod, "ask_gpt", return_value=r_b):
+            vb, _, eb, _ = eng_b.process_message(
+                "cita param artes con luis a las 20"
+            )
+
+        if eb is not None:
+            raise AssertionError(f"smoke34B no debe crear {eb!r}")
+        if eng_b._events.list_events():
+            raise AssertionError("smoke34B sin eventos en store")
+        vb_lc = (vb or "").lower()
+        if "te refieres" not in vb_lc:
+            raise AssertionError(f"smoke34B respuesta con '¿Te refieres' {vb!r}")
+        st_b = eng_b._thread_store.get_state()
+        if not st_b.get("open"):
+            raise AssertionError(f"smoke34B hilo abierto {st_b!r}")
+        if (st_b.get("pending") or {}).get("field") != "raw_correction_confirmation":
+            raise AssertionError(f"smoke34B pending.field {st_b!r}")
+
+    # ── CASO C ── confirmación "sí" desde hilo raw_correction_confirmation → crea ───
+    r_c_block = dict(r_b)
+    r_c_confirm: dict[str, Any] = {
+        "s": "ready",
+        "i": "event",
+        "a": "create",
+        "obj": {
+            "cal_title": "cita con Luis",
+            "cal_date_text": "martes",
+            "cal_date_iso": "2026-05-19",
+            "cal_time_text": "20:00",
+            "cal_people": ["Luis"],
+        },
+        "target": None,
+        "q": None,
+        "r": "He guardado la cita con Luis para el martes a las 20:00.",
+        "pending": None,
+        "ctx": None,
+    }
+
+    with tempfile.TemporaryDirectory() as d_c:
+        base = Path(d_c)
+        eng_c = _make_engine(base)
+        seq_c = iter([r_c_block, r_c_confirm])
+
+        def fseq_c(_p: dict[str, Any]) -> dict[str, Any] | None:
+            return next(seq_c)
+
+        with patch.object(engine_mod, "ask_gpt", side_effect=fseq_c):
+            eng_c.process_message("cita param artes con luis a las 20")
+            vc, _, sc, _ = eng_c.process_message("sí")
+
+        if sc is None:
+            raise AssertionError("smoke34C debe crear evento")
+        if str(sc.get("title")) != "cita con Luis":
+            raise AssertionError(f"smoke34C title {sc!r}")
+        if str(sc.get("date_iso")) != "2026-05-19":
+            raise AssertionError(f"smoke34C date_iso {sc!r}")
+        if str(sc.get("time_text")) != "20:00":
+            raise AssertionError(f"smoke34C time_text {sc!r}")
+        evs_c = eng_c._events.list_events()
+        if len(evs_c) != 1:
+            raise AssertionError(f"smoke34C un evento {evs_c!r}")
+        if eng_c._thread_store.get_state().get("open"):
+            raise AssertionError("smoke34C hilo cerrado")
+
+    print("smoke 34 OK (lectura robusta del raw v0.47.36.11)")
+
+
 def main() -> int:
     try:
         smoke_1_2_ambiguous_then_continue()
@@ -5182,6 +5310,7 @@ def main() -> int:
         smoke_31_event_create_requires_minimal_identity()
         smoke_32_event_update_missing_target_can_offer_create_instead()
         smoke_33_event_minimal_identity_and_title_cleanup()
+        smoke_34_robust_raw_reading_contract()
     except AssertionError as e:
         print(f"FAIL: {e}", file=sys.stderr)
         return 1
