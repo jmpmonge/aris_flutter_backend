@@ -7,7 +7,20 @@ Notes: **`list_notes`** con filtros triviales opcionales (**text**/**content**, 
 
 from __future__ import annotations
 
+import re
 from typing import Any, Iterable
+
+_CAND_ISO = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _opt_candidate_date_iso(v: Any) -> str | None:
+    if v is None:
+        return None
+    s = str(v).strip()
+    if not s or not _CAND_ISO.match(s):
+        return None
+    return s
+
 
 _MAX_CALENDAR_CANDIDATES = 5
 _MAX_TASK_CANDIDATES = 50
@@ -478,6 +491,7 @@ def _candidate_from_event(ev: dict[str, Any]) -> dict[str, Any]:
         "label": label,
         "title": titulo or None,
         "date_text": dte,
+        "date_iso": _opt_candidate_date_iso(ev.get("date_iso")),
         "time_text": (tte if tte else None),
         "participants": participants,
     }

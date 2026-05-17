@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import copy
 import re
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 DEFAULT_TIMEZONE = "Europe/Madrid"
 DEFAULT_LOCALE = "es-ES"
@@ -47,6 +49,12 @@ FAIL_DEFAULT: dict[str, Any] = {
 }
 
 
+def _local_calendar_date_iso(tz_name: str) -> str:
+    """Fecha civil YYYY-MM-DD del reloj en `tz`; no interpreta el raw del usuario."""
+    z = ZoneInfo(tz_name)
+    return datetime.now(z).date().isoformat()
+
+
 def build_payload(raw_text: str, thread_state: dict[str, Any] | None) -> dict[str, Any]:
     """Empaqueta texto y hilo abierto sin semántica.
 
@@ -59,6 +67,7 @@ def build_payload(raw_text: str, thread_state: dict[str, Any] | None) -> dict[st
         "raw": raw,
         "tz": DEFAULT_TIMEZONE,
         "locale": DEFAULT_LOCALE,
+        "local_date": _local_calendar_date_iso(DEFAULT_TIMEZONE),
     }
 
     if isinstance(thread_state, dict) and thread_state.get("open") is True:
@@ -100,6 +109,7 @@ def build_context_response_payload(
         "raw": raw_po,
         "tz": DEFAULT_TIMEZONE,
         "locale": DEFAULT_LOCALE,
+        "local_date": _local_calendar_date_iso(DEFAULT_TIMEZONE),
         "mode": "context_response",
         "thread": {
             "intent": respuesta_gpt_previa.get("i"),

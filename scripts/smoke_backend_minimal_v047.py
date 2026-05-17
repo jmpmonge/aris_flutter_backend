@@ -1499,6 +1499,90 @@ def smoke_16_event_20h_never_asks() -> None:
     print("smoke 16 OK (20h y a las 20 sin ask; a las 8 ask)")
 
 
+def smoke_17_event_create_with_date_iso() -> None:
+    """v0.47.27: GPT debe devolver date_iso con fecha clara — mock valida persistencia."""
+
+    r_with_iso: dict[str, Any] = {
+        "s": "ready",
+        "i": "event",
+        "a": "create",
+        "obj": {
+            "title": "cita con el médico",
+            "date": "lunes",
+            "date_iso": "2026-05-18",
+            "time": "20:00",
+        },
+        "target": None,
+        "q": None,
+        "r": (
+            "He guardado la cita con el médico para el lunes "
+            "a las 20:00."
+        ),
+        "pending": None,
+        "ctx": None,
+    }
+
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        engine = _make_engine(base)
+        with patch.object(engine_mod, "ask_gpt", return_value=r_with_iso):
+            engine.process_message("cita con el médico el lunes a las 20h")
+        evs = engine._events.list_events()
+        if len(evs) != 1:
+            raise AssertionError(f"smoke17A esperaba 1 evento: {evs!r}")
+        ev = evs[0]
+        if str(ev.get("title")) != "cita con el médico":
+            raise AssertionError(ev.get("title"))
+        if str(ev.get("date_text")) != "lunes":
+            raise AssertionError(ev.get("date_text"))
+        if str(ev.get("date_iso")) != "2026-05-18":
+            raise AssertionError(f"smoke17A date_iso {ev.get('date_iso')!r}")
+        if str(ev.get("time_text")) != "20:00":
+            raise AssertionError(ev.get("time_text"))
+        if engine._thread_store.get_state().get("open"):
+            raise AssertionError("smoke17A hilo debía estar cerrado")
+        if engine._tasks.list_tasks() or engine._notes.list_notes():
+            raise AssertionError("smoke17A sin tarea/nota")
+
+    r_without_iso: dict[str, Any] = {
+        "s": "ready",
+        "i": "event",
+        "a": "create",
+        "obj": {
+            "title": "cita",
+            "date": "lunes",
+            "time": "20:00",
+        },
+        "target": None,
+        "q": None,
+        "r": "He guardado la cita para el lunes a las 20:00.",
+        "pending": None,
+        "ctx": None,
+    }
+
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        engine = _make_engine(base)
+        with patch.object(engine_mod, "ask_gpt", return_value=r_without_iso):
+            engine.process_message("cita para el lunes a las 20h")
+        evs_b = engine._events.list_events()
+        if len(evs_b) != 1:
+            raise AssertionError(evs_b)
+        eb = evs_b[0]
+        if str(eb.get("date_text")) != "lunes":
+            raise AssertionError(eb.get("date_text"))
+        if eb.get("date_iso") is not None:
+            raise AssertionError(f"smoke17B date_iso debía absent/None {eb.get('date_iso')!r}")
+        if str(eb.get("time_text")) != "20:00":
+            raise AssertionError(eb.get("time_text"))
+        if engine._thread_store.get_state().get("open"):
+            raise AssertionError("smoke17B hilo debía estar cerrado")
+        if engine._tasks.list_tasks() or engine._notes.list_notes():
+            raise AssertionError("smoke17B sin tarea/nota")
+
+    print("smoke 17 OK (create con date_iso y sin él)")
+
+
 def main() -> int:
     try:
         smoke_1_2_ambiguous_then_continue()
@@ -1514,6 +1598,7 @@ def main() -> int:
         smoke_14_event_24h_time_and_weekday_text()
         smoke_15_gpt_contract_24h_no_ask()
         smoke_16_event_20h_never_asks()
+        smoke_17_event_create_with_date_iso()
     except AssertionError as e:
         print(f"FAIL: {e}", file=sys.stderr)
         return 1

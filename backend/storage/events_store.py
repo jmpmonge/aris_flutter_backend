@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,19 @@ from backend.storage.json_store import (
 
 def _backend_data_dir() -> Path:
     return Path(__file__).resolve().parent.parent / "data"
+
+
+_DATE_ISO_BASIC_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _normalize_stored_date_iso(v: Any) -> str | None:
+    """Sólo formato YYYY-MM-DD; valores inválidos → None (seguridad al guardar)."""
+    if v is None:
+        return None
+    s = str(v).strip()
+    if not s or not _DATE_ISO_BASIC_RE.match(s):
+        return None
+    return s
 
 
 class EventsStore:
@@ -56,6 +70,7 @@ class EventsStore:
             "id": new_id(),
             "title": title,
             "date_text": self._opt_str(data.get("date_text")),
+            "date_iso": _normalize_stored_date_iso(data.get("date_iso")),
             "time_text": self._opt_str(data.get("time_text")),
             "participants": participants,
             "location": self._opt_str(data.get("location")),
@@ -91,6 +106,8 @@ class EventsStore:
 
         if "date_text" in patch:
             cur["date_text"] = self._opt_str(patch.get("date_text"))
+        if "date_iso" in patch:
+            cur["date_iso"] = _normalize_stored_date_iso(patch.get("date_iso"))
         if "time_text" in patch:
             cur["time_text"] = self._opt_str(patch.get("time_text"))
         if "location" in patch:

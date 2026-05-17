@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from backend.core.context_resolver import resolver_contexto
@@ -36,6 +37,8 @@ _MSG_FAIL_FALLBACK = (
     "de forma más concreta?"
 )
 _MAX_CONTEXT_NEED_CONTEXT_DEPTH = 8
+
+_DATE_ISO_BASIC_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 class ArisMinimalEngine:
@@ -455,7 +458,54 @@ class ArisMinimalEngine:
             if isinstance(dm, int):
                 out["duration_minutes"] = dm
 
+        if "date_iso" in obj or "dateISO" in obj:
+            cand = ArisMinimalEngine._coerce_date_iso_from_obj(obj)
+            if cand is not None:
+                out["date_iso"] = cand
+            else:
+                def _blank_di(v: Any) -> bool:
+                    return v is None or (
+                        isinstance(v, str) and str(v).strip() == ""
+                    )
+
+                had_nonempty = False
+                if "date_iso" in obj and not _blank_di(obj.get("date_iso")):
+                    had_nonempty = True
+                if "dateISO" in obj and not _blank_di(obj.get("dateISO")):
+                    had_nonempty = True
+                if not had_nonempty:
+                    out["date_iso"] = None
+
         return out
+
+    @staticmethod
+    def _coerce_date_iso_raw(raw: Any) -> str | None:
+        if raw is None:
+            return None
+        s = str(raw).strip()
+        if not s or not _DATE_ISO_BASIC_RE.match(s):
+            return None
+        try:
+            y = int(s[0:4])
+            mo = int(s[5:7])
+            d = int(s[8:10])
+        except ValueError:
+            return None
+        if y < 1970 or y > 2199 or mo < 1 or mo > 12 or d < 1 or d > 31:
+            return None
+        return s
+
+    @staticmethod
+    def _coerce_date_iso_from_obj(obj: dict[str, Any]) -> str | None:
+        if not isinstance(obj, dict):
+            return None
+        for key in ("date_iso", "dateISO"):
+            if key not in obj:
+                continue
+            got = ArisMinimalEngine._coerce_date_iso_raw(obj.get(key))
+            if got is not None:
+                return got
+        return None
 
     @staticmethod
     def _event_payload(obj: dict[str, Any]) -> dict[str, Any] | None:
@@ -491,10 +541,13 @@ class ArisMinimalEngine:
             str(desc).strip() if desc is not None and str(desc).strip() else None
         )
 
+        date_iso_store = ArisMinimalEngine._coerce_date_iso_from_obj(obj)
+
         out: dict[str, Any] = {
             "title": title,
             "date_text": str(date_text).strip() if date_text is not None else None,
             "time_text": str(time_text).strip() if time_text is not None else None,
+            "date_iso": date_iso_store,
             "participants": participants,
             "location": location,
             "description": description,

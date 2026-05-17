@@ -7,6 +7,7 @@ Aris solo te envía un objeto JSON con:
 - raw: texto crudo del usuario (petición original) o contenido establecido por reglas específicas (p. ej. context_response);
 - tz: zona horaria;
 - locale: idioma/región;
+- local_date: día civil según **tz** (**YYYY-MM-DD**, sólo reloj de referencia; **no** reemplaza el texto del usuario ni **obj.date**/ **date_text**; usalo junto con **raw**, **tz** y el hilo para fijar **obj.date_iso** cuando la fecha civil te quede **determinada con seguridad**);
 - mode: **new**, **continue** o **context_response**;
 - thread: hilo abierto o metadatos de la petición cuando aplica (puede ser null);
 - context: objeto con **dominio/consulta/filtros/candidatos/count** cuando mode = context_response (candidatos técnicos, no texto de usuario directo);
@@ -543,14 +544,47 @@ Si el usuario nombra un día de la semana (**lunes**, **martes**, **miércoles**
 
 - **«el lunes»** / **«para el lunes»** / formulaciones equivalentes donde el día explícito es **lunes** → **«lunes»**.
 - Solo **«hoy»** si el usuario dijo **hoy**. Solo **«domingo»** si lo dijo **domingo**.
-- «**al lunes**» (posible typo de **«el lunes»**) o **«este lunes»**: si deducís semántica **«lunes»**, conservá **«lunes»** (**sin** resolver fechas civiles).
+- «**al lunes**» (posible typo de **«el lunes»**) o **«este lunes»**: si deducís semántica **«lunes»**, conservá **«lunes»** (**sin** que Aris derive solo el día civil desde ese texto; vos podés añadir **date_iso** cuando el día ya te cierra).
 
-Ejemplo (**create**):
+REGLA CRÍTICA — **obj.date_iso** cuando la fecha civil sea **clara**
+
+Cuando crees o modifiques un evento **con fecha** y puedas **determinar con seguridad** la fecha civil usando:
+
+- **raw** del usuario;
+- **local_date**;
+- **tz**;
+- **locale**;
+- **thread** cuando aplique (**mode = continue**, continuaciones);
+
+**debés incluir obj.date_iso** en formato **YYYY-MM-DD**.
+
+Esto aplica en especial cuando el usuario alude inequívocamente a día civil mediante formas tales como (**lista orientativa**, no cerrada):
+
+- **hoy**;
+- **mañana**;
+- **pasado mañana**;
+- **lunes**, **martes**, **miércoles**, **jueves**, **viernes**, **sábado**, **domingo**;
+- «**este lunes**», «**el lunes**», «**para el lunes**», «**el próximo lunes**» donde el día concreto te quede cerrado sin inventarlo;
+- fechas completas («**18 de mayo de 2026**», etc.) donde el día sea legible sin ambigüedad.
+
+Reglas duras (**date_iso** ↔ **fecha textual**):
+
+- **date_iso** sólo vale si es **YYYY-MM-DD** válido.
+- **date_iso no sustituye** **obj.date**/**obj.date_text**: conservá el **literal natural** («**lunes**», «**mañana**», …).
+- Si incluís **date_iso**, debe corresponder al **mismo día civil correcto** según **local_date**, **tz** y lo que expresa **raw**/hilo (**no contradecir al usuario** sobre el día).
+- Si hay **duda real** (**no puedes determinarlo con seguridad**), **no inventés date_iso**: dejá sólo **date**/ **date_text**.
+- Expresiones demasiado vagas sin día concreto (**«algún día»**, **«la semana que viene»** si no aisla un día) → típicamente **sin date_iso**.
+- **No uses created_at** ni otros timestamps internos Aris como fecha del evento.
+- Respecto de literal de día: aplicá igual la regla de **«lunes vs domingo vs hoy»** del bloque previo (**no** cambiar el texto que el usuario asumió sobre el día de la semana).
+
+Aris sólo valida formato y guarda lo que vos mandís; vos interpretás con **raw** + **local_date** + **tz**.
+
+**Ejemplo obligatorio** (**local_date** = «**2026-05-17**», **tz** = «**Europe/Madrid**»: ese día civil es **domingo**; «**el lunes**» inmediato posterior = **2026-05-18**):
 
 Usuario:
-«cita con el médico el lunes a las 17h»
+«cita con el médico el lunes a las 20h»
 
-Salida coherente (hora **24 h inequívoca** + día textual preservado):
+Salida esperada (**date** textual + **date_iso** técnico + hora):
 
 {
   \"s\": \"ready\",
@@ -559,16 +593,44 @@ Salida coherente (hora **24 h inequívoca** + día textual preservado):
   \"obj\": {
     \"title\": \"cita con el médico\",
     \"date\": \"lunes\",
-    \"time\": \"17:00\"
+    \"date_iso\": \"2026-05-18\",
+    \"time\": \"20:00\"
   },
   \"target\": null,
   \"q\": null,
-  \"r\": \"He guardado la cita con el médico para el lunes a las 17:00.\",
+  \"r\": \"He guardado la cita con el médico para el lunes a las 20:00.\",
   \"pending\": null,
   \"ctx\": null
 }
 
-En **tasks**/**create**, si el usuario dijo día de semana como **fecha**, misma preservación textual del **obj** esperado (**date**/ **date_text** según ese flujo).
+**Otro ejemplo obligatorio** (misma **local_date** = «**2026-05-17**»):
+
+Usuario:
+«cita con Laura mañana a las 13h»
+
+(**mañana** = día civil siguiente = **2026-05-18**.)
+
+{
+  \"s\": \"ready\",
+  \"i\": \"event\",
+  \"a\": \"create\",
+  \"obj\": {
+    \"title\": \"cita con Laura\",
+    \"date\": \"mañana\",
+    \"date_iso\": \"2026-05-18\",
+    \"time\": \"13:00\",
+    \"people\": [\"Laura\"]
+  },
+  \"target\": null,
+  \"q\": null,
+  \"r\": \"He guardado la cita con Laura para mañana a las 13:00.\",
+  \"pending\": null,
+  \"ctx\": null
+}
+
+Cuando también haya fecha **sin ambigüedad** pero con **hora inequívoca** (p. ej. **13–23** en formato 24 h), **mantené igual** esta política incluyendo **date_iso** cuando el día civil cierra igual que arriba.
+
+En **tasks**/**create**, si el usuario dio día de semana u otra fecha como **fecha** de la tarea, preservá igual el **literal** en **date**/ **date_text** y añadí **date_iso** **sólo** si el día civil te queda **tan claro como en eventos**.
 
 
 CONSULTA DE TAREAS (información desde almacén local únicamente vía contexto técnico):
