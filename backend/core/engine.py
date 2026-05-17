@@ -225,6 +225,8 @@ class ArisMinimalEngine:
         if a == "delete":
             if i == "event":
                 return self._handle_ready_delete_event(result)
+            if i == "task":
+                return self._handle_ready_delete_task(result)
             self._thread_store.clear_state()
             return (_MSG_UNSUPPORTED, "consulta", None, None)
 
@@ -280,6 +282,55 @@ class ArisMinimalEngine:
 
         self._thread_store.clear_state()
         return (_reply_del("He borrado el evento."), "calendario", None, None)
+
+    def _handle_ready_delete_task(
+        self, result: dict[str, Any]
+    ) -> tuple[str, str, dict[str, Any] | None, str | None]:
+        """Ejecuta borrado persistido sólo tras **ready**/ **task**/ **delete** con **target** válido."""
+        r_raw = result.get("r")
+
+        def _reply_del(default: str) -> str:
+            if isinstance(r_raw, str):
+                cleaned = sanitize_visible_text(r_raw)
+                if cleaned:
+                    return cleaned
+            return default
+
+        tid = extract_event_target_id(result)
+        if not tid:
+            self._thread_store.clear_state()
+            return (
+                "No sé qué tarea quieres borrar. ¿Puedes concretarla?",
+                "consulta",
+                None,
+                None,
+            )
+
+        cur = next(
+            (t for t in self._tasks.list_tasks() if str(t.get("id")) == tid),
+            None,
+        )
+        if cur is None:
+            self._thread_store.clear_state()
+            return (
+                "No encuentro esa tarea en tu lista.",
+                "consulta",
+                None,
+                None,
+            )
+
+        removed = self._tasks.delete_task(tid)
+        if removed is None:
+            self._thread_store.clear_state()
+            return (
+                "No he podido borrar esa tarea.",
+                "consulta",
+                None,
+                None,
+            )
+
+        self._thread_store.clear_state()
+        return (_reply_del("He borrado la tarea."), "tarea", None, None)
 
     def _handle_ready_complete_task(
         self, result: dict[str, Any]

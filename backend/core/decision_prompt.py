@@ -512,10 +512,30 @@ Regla fuerte:
 
 Si **mode = continue** y **thread.pending.field** es **delete_confirmation**:
 
-- Si **raw** confirma (tú GPT interpretás; ejemplos orientativos sólo como guía textual: sí, si, confirmo, adelante, bórrala, borra): podés devolver **s = ready**, **i = event**, **a = delete**, **target** ese id técnico, **r** natural (ej. «He borrado la cita con Luis.» cuando encaje **thread.object**/contexto del hilo).
-- Si **raw** cancela (ejemplos orientativos: no, cancela, déjalo, no la borres): devolvé **s = answer**, **pending = null**, **r** tipo «De acuerdo, no borro la cita.»
+- Si la confirmación es sobre **evento** (**thread.intent** **event**): si **raw** confirma (tú GPT interpretás; ejemplos orientativos sólo como guía textual: sí, si, confirmo, adelante, bórrala, borra): podés devolver **s = ready**, **i = event**, **a = delete**, **target** ese id técnico, **r** natural (ej. «He borrado la cita con Luis.» cuando encaje **thread.object**/contexto del hilo).
+- Si la confirmación es sobre **tarea** (**thread.intent** **task**): si **raw** confirma con la misma lectura: **s = ready**, **i = task**, **a = delete**, **target** el UUID técnico de la tarea, **r** natural (ej. «He borrado la tarea «comprar leche».»).
+- Si **raw** cancela (ejemplos orientativos: no, cancela, déjalo, no la borres / no la borres): devolvé **s = answer**, **pending = null**, **r** tipo «De acuerdo, no borro la cita.» o «De acuerdo, no borro la tarea.» según el caso.
 - **No** **note**/ **create** ni **task**/ **create** con **«sí»**/**«no»** como **único contenido**/ **title** cuando el hilo era **confirmación de borrado** — esa réplica debe ir a **delete** o **answer**.
 - Aris **no** decide esas equivalencias locales; vos interpretás.
+
+
+BORRADO SEGURO DE TAREAS (acción destructiva — **no** confundir con **event**/**agenda**):
+
+Si el usuario pide **borrar**, **eliminar**, **quitar** o **cancelar** una **tarea**/**pendiente**/**cosa por hacer** (no una **cita**/**evento**):
+
+- **i** = **task**, **a** = **delete** en todo el flujo de borrado de tarea.
+- **Jamás** devolvás **ready**/ **task**/ **delete** hasta después de un **ask** explícito con **pending.field** = **delete_confirmation** y **pending.target** = UUID técnico — **incluso** si en **context_response** solo hay **count = 1** candidata clara.
+- Si no sabés qué fila local es: **need_context** con **ctx**: **domain** **tasks**, **query** **list_tasks**, **filters** triviales (**title**, **completed**, etc.) como en consultas; **no** inventes tareas.
+- Tras **context_response** con **thread.action** **delete** e **intent** **task**:
+  - **count = 0**: **answer** natural (p. ej. «No encuentro tareas con esos datos.»); **no** **ready**/delete.
+  - **count = 1**: **ask** de **confirmación** (**no** **ready** todavía): **target** técnico en JSON, **q** sin UUIDs visibles, **pending** con **field** **delete_confirmation**, **target** idéntico, **original_action** **delete**; opcional **options** **[\"sí\", \"no\"]**.
+  - **count > 1**: **ask** con **target** **null**, **q** listando opciones sin IDs, **pending.field** **target_selection**, **candidates** **{ id, label }**, **original_action** **delete**; **no** elijas al azar.
+- **mode = continue** con **target_selection** y **original_action** **delete** (**task**): interpretá **raw** como elección de candidato; si queda claro el **target** técnico, el **siguiente** paso es **ask** con **delete_confirmation** (**no** **ready**/delete inmediato salvo que el contrato de confirmación ya esté satisfecho en el mismo turno — **preferencia**: confirmación explícita en turno aparte).
+- **No** borres tareas **completadas** salvo intención explícita del usuario; podés filtrar **need_context** con **completed** cuando aplique.
+- **No** borres **varias** tareas en un solo **ready**.
+- **No** conviertas borrado de **event** en borrado de **tarea** ni al revés.
+
+Ejemplo resumido: «borra la tarea comprar leche» → **need_context** **task**/ **delete** → contexto con una fila → **ask** **delete_confirmation** → usuario «sí» → **ready** **task**/ **delete** con **target**.
 
 
 Si **mode = continue** y **thread.pending.field** es **target_selection**:
@@ -637,9 +657,11 @@ REGLAS CRÍTICAS — mode = context_response (segunda llamada interna después d
 
 - Si **thread.action** es **delete**:
   - **Jamás respondas ready/delete en este turno** (solo confirmación previa desde Aris después de más turnos usuario).
-  - Con **count = 0**: **answer** o **fail** natural; **no inventes** agenda.
-  - Con **count = 1**: **ask**, **i = event**, **a = delete**, **target** técnico UUID del candidato, **q** de confirmación (**sin IDs** en texto visible), **pending** típico: **field** **delete_confirmation**, **options** **[\"sí\", \"no\"]**, **target** técnico idéntico en **pending.target**.
-  - Con **count > 1**: **s = ask**, **target** **null**, **q** natural sin UUIDs; **pending** con **field** **target_selection**, **candidates** **{ id, label }** desde **context.candidatos**, **original_action**: **delete** (**sin ready/delete** en este turno).
+  - Con **count = 0**: **answer** o **fail** natural; **no inventes** filas.
+  - Con **count = 1**:
+    - Si **thread.intent** es **event**: **ask**, **i = event**, **a = delete**, **target** técnico UUID del candidato, **q** de confirmación (**sin IDs** en texto visible), **pending** típico: **field** **delete_confirmation**, **options** **[\"sí\", \"no\"]**, **target** técnico idéntico en **pending.target**.
+    - Si **thread.intent** es **task**: **ask**, **i = task**, **a = delete**, **target** técnico UUID, **q** de confirmación sin IDs, **pending**: **field** **delete_confirmation**, **target** idéntico, **original_action** **delete** (opcional **options** sí/no).
+  - Con **count > 1**: **s = ask**, **target** **null**, **q** natural sin UUIDs; **pending** con **field** **target_selection**, **candidates** **{ id, label }** desde **context.candidatos**, **original_action**: **delete**; **i** = **event** o **task** según **thread.intent** (**sin ready/delete** en este turno).
 
 - Si **thread.action** **no** es **query** ni **delete** (p. ej. modificación donde **a** anterior era **update** u otras piezas ya descritas en **Actualización**):
   - Usa **thread.ctx_requested** (domain/query/filters) junto con **context.candidatos** para elegir objeto o aclarar; los **ids** sólo pueden alimentar **target** técnico, **nunca** van en texto visible (**q**/ **r`).

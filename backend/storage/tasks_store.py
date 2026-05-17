@@ -144,16 +144,19 @@ class TasksStore:
     def complete_task(self, task_id: str) -> dict[str, Any] | None:
         return self.update_task(task_id, {"completed": True})
 
-    def delete_task(self, task_id: str) -> bool:
+    def delete_task(self, task_id: str) -> dict[str, Any] | None:
+        """Elimina por id estable; sin semántica. Devuelve la fila borrada o None."""
         tid = str(task_id).strip()
         if not tid:
-            return False
+            return None
         items = self.list_tasks()
-        new_items = [t for t in items if str(t.get("id")) != tid]
-        if len(new_items) == len(items):
-            return False
-        save_json_list(self._path, new_items)
-        return True
+        idx = next((i for i, t in enumerate(items) if str(t.get("id")) == tid), None)
+        if idx is None:
+            return None
+        removed = dict(items[idx])
+        del items[idx]
+        save_json_list(self._path, items)
+        return removed
 
     @staticmethod
     def _opt_str(v: Any) -> str | None:

@@ -2405,6 +2405,302 @@ def smoke_21_clean_task_card_contract() -> None:
     print("smoke 21 OK (contrato limpio ficha de tarea v0.47.32)")
 
 
+def smoke_22_task_delete_safe() -> None:
+    """v0.47.35: borrar tareas vía ready/task/delete; GPT pide confirmación (borrado no semántico en Aris)."""
+    r_vis_done = "He borrado la tarea «comprar leche»."
+
+    # --- CASO A: ready/delete con target borra ---
+    with tempfile.TemporaryDirectory() as d_a:
+        base = Path(d_a)
+        engine = _make_engine(base)
+        row = engine._tasks.add_task({"title": "comprar leche"})
+        tid = str(row["id"])
+        r_a: dict[str, Any] = {
+            "s": "ready",
+            "i": "task",
+            "a": "delete",
+            "obj": {},
+            "target": tid,
+            "q": None,
+            "r": r_vis_done,
+            "pending": None,
+            "ctx": None,
+        }
+        with patch.object(engine_mod, "ask_gpt", return_value=r_a):
+            t1, cat, _, _ = engine.process_message("confirmo")
+        _assert_no_uuid_in_visible(t1, "smoke22A")
+        if r_vis_done not in (t1 or ""):
+            raise AssertionError(f"smoke22A visible: {t1!r}")
+        if cat != "tarea":
+            raise AssertionError(f"smoke22A categoría: {cat!r}")
+        if engine._tasks.list_tasks():
+            raise AssertionError("smoke22A: tarea debía borrarse")
+        if engine._notes.list_notes():
+            raise AssertionError("smoke22A sin notas")
+        if engine._events.list_events():
+            raise AssertionError("smoke22A sin eventos")
+        if engine._thread_store.get_state().get("open"):
+            raise AssertionError("smoke22A hilo cerrado")
+
+    # --- CASO B: sin target no borra ---
+    r_b: dict[str, Any] = {
+        "s": "ready",
+        "i": "task",
+        "a": "delete",
+        "obj": {},
+        "target": None,
+        "q": None,
+        "r": None,
+        "pending": None,
+        "ctx": None,
+    }
+    with tempfile.TemporaryDirectory() as d_b:
+        base = Path(d_b)
+        engine = _make_engine(base)
+        engine._tasks.add_task({"title": "persistir"})
+        with patch.object(engine_mod, "ask_gpt", return_value=r_b):
+            tb, _, _, _ = engine.process_message("cualquier cosa")
+        if "concret" not in (tb or "").lower():
+            raise AssertionError(f"smoke22B: {tb!r}")
+        if not engine._tasks.list_tasks():
+            raise AssertionError("smoke22B tarea debe seguir")
+        if engine._thread_store.get_state().get("open"):
+            raise AssertionError("smoke22B hilo cerrado")
+
+    # --- CASOS C + D: need_context → ask confirmación; luego sí → borra ---
+    q_c = (
+        "¿Confirmas que quieres borrar la tarea «comprar leche»?"
+    )
+    r_c1: dict[str, Any] = {
+        "s": "need_context",
+        "i": "task",
+        "a": "delete",
+        "obj": {},
+        "target": None,
+        "q": None,
+        "r": None,
+        "pending": None,
+        "ctx": {
+            "domain": "tasks",
+            "query": "list_tasks",
+            "filters": {"title": "comprar leche"},
+        },
+    }
+
+    with tempfile.TemporaryDirectory() as d_cd:
+        base = Path(d_cd)
+        engine = _make_engine(base)
+        rc_row = engine._tasks.add_task({"title": "comprar leche"})
+        tid_cd = str(rc_row["id"])
+        r_c2_eff: dict[str, Any] = {
+            "s": "ask",
+            "i": "task",
+            "a": "delete",
+            "obj": {},
+            "target": tid_cd,
+            "q": q_c,
+            "r": None,
+            "pending": {
+                "field": "delete_confirmation",
+                "target": tid_cd,
+                "original_action": "delete",
+                "options": ["sí", "no"],
+            },
+            "ctx": None,
+        }
+        r_d_ready_eff: dict[str, Any] = {
+            "s": "ready",
+            "i": "task",
+            "a": "delete",
+            "obj": {},
+            "target": tid_cd,
+            "q": None,
+            "r": r_vis_done,
+            "pending": None,
+            "ctx": None,
+        }
+
+        seq_cd = iter([r_c1, r_c2_eff])
+
+        def f_cd(_p: dict[str, Any]) -> dict[str, Any] | None:
+            return next(seq_cd)
+
+        with patch.object(engine_mod, "ask_gpt", side_effect=f_cd):
+            tc, _, _, _ = engine.process_message("__borrar_comprar_leche__")
+        _assert_no_uuid_in_visible(tc, "smoke22C")
+        if tc.strip() != q_c:
+            raise AssertionError(f"smoke22C q: {tc!r}")
+        if not engine._tasks.list_tasks():
+            raise AssertionError("smoke22C tarea intacta")
+        st_c = engine._thread_store.get_state()
+        if not st_c.get("open"):
+            raise AssertionError("smoke22C hilo abierto")
+        penc = st_c.get("pending") or {}
+        if penc.get("field") != "delete_confirmation":
+            raise AssertionError(f"smoke22C pending {penc!r}")
+
+        with patch.object(engine_mod, "ask_gpt", return_value=r_d_ready_eff):
+            td, _, _, _ = engine.process_message("sí")
+        _assert_no_uuid_in_visible(td, "smoke22D")
+        if engine._tasks.list_tasks():
+            raise AssertionError("smoke22D borrada")
+        for rn in engine._notes.list_notes():
+            c = str(rn.get("content") or "")
+            if c.strip().lower() in ("sí", "si"):
+                raise AssertionError(f"smoke22D nota sí: {rn!r}")
+        if engine._thread_store.get_state().get("open"):
+            raise AssertionError("smoke22D hilo cerrado")
+
+    # --- CASO E: no cancela borrado ---
+    with tempfile.TemporaryDirectory() as d_e:
+        base = Path(d_e)
+        engine = _make_engine(base)
+        te = engine._tasks.add_task({"title": "se queda"})
+        tid_e = str(te["id"])
+        q_e = "¿Confirmas borrar?"
+        engine._thread_store.save_state(
+            {
+                "open": True,
+                "intent": "task",
+                "object": {},
+                "last_question": q_e,
+                "pending": {
+                    "field": "delete_confirmation",
+                    "target": tid_e,
+                    "original_action": "delete",
+                },
+                "target": tid_e,
+            }
+        )
+        r_e: dict[str, Any] = {
+            "s": "answer",
+            "i": "task",
+            "a": "delete",
+            "obj": {},
+            "target": None,
+            "q": None,
+            "r": "De acuerdo, no borro la tarea.",
+            "pending": None,
+            "ctx": None,
+        }
+        with patch.object(engine_mod, "ask_gpt", return_value=r_e):
+            te_out, _, _, _ = engine.process_message("no")
+        _assert_no_uuid_in_visible(te_out, "smoke22E")
+        if not engine._tasks.list_tasks():
+            raise AssertionError("smoke22E tarea debe existir")
+        if engine._thread_store.get_state().get("open"):
+            raise AssertionError("smoke22E hilo cerrado")
+        for rn in engine._notes.list_notes():
+            tx = str(rn.get("content") or "").lower()
+            if tx.strip() == "no":
+                raise AssertionError(f"smoke22E nota no: {rn!r}")
+
+    # --- CASOS F + G: varias → selección → confirmación (no borra aún en G) ---
+    q_sel = (
+        "He encontrado varias tareas parecidas. ¿Cuál quieres borrar?"
+    )
+    r_f1: dict[str, Any] = {
+        "s": "need_context",
+        "i": "task",
+        "a": "delete",
+        "obj": {},
+        "target": None,
+        "q": None,
+        "r": None,
+        "pending": None,
+        "ctx": {
+            "domain": "tasks",
+            "query": "list_tasks",
+            "filters": {"title": "llamar"},
+        },
+    }
+    q_g = (
+        "¿Confirmas que quieres borrar la tarea «llamar al dentista»?"
+    )
+    with tempfile.TemporaryDirectory() as d_fg:
+        base = Path(d_fg)
+        engine = _make_engine(base)
+        t_luis = engine._tasks.add_task({"title": "llamar a Luis"})
+        t_den = engine._tasks.add_task({"title": "llamar al dentista"})
+        id1 = str(t_luis["id"])
+        id2 = str(t_den["id"])
+        r_f2: dict[str, Any] = {
+            "s": "ask",
+            "i": "task",
+            "a": "delete",
+            "obj": {},
+            "target": None,
+            "q": q_sel,
+            "r": None,
+            "pending": {
+                "field": "target_selection",
+                "original_action": "delete",
+                "candidates": [
+                    {"id": id1, "label": "llamar a Luis"},
+                    {"id": id2, "label": "llamar al dentista"},
+                ],
+            },
+            "ctx": None,
+        }
+        seq_fg = iter([r_f1, r_f2])
+
+        def f_fg(_p: dict[str, Any]) -> dict[str, Any] | None:
+            return next(seq_fg)
+
+        with patch.object(engine_mod, "ask_gpt", side_effect=f_fg):
+            tf, _, _, _ = engine.process_message("__borrar_llamar__")
+        _assert_no_uuid_in_visible(tf, "smoke22F")
+        if tf.strip() != q_sel:
+            raise AssertionError(f"smoke22F: {tf!r}")
+        if len(engine._tasks.list_tasks()) != 2:
+            raise AssertionError("smoke22F ambas intactas")
+        st_f = engine._thread_store.get_state()
+        if not st_f.get("open"):
+            raise AssertionError("smoke22F hilo abierto")
+        if (st_f.get("pending") or {}).get("field") != "target_selection":
+            raise AssertionError(f"smoke22F pending {st_f!r}")
+
+        r_g_step: dict[str, Any] = {
+            "s": "ask",
+            "i": "task",
+            "a": "delete",
+            "obj": {},
+            "target": id2,
+            "q": q_g,
+            "r": None,
+            "pending": {
+                "field": "delete_confirmation",
+                "target": id2,
+                "original_action": "delete",
+            },
+            "ctx": None,
+        }
+        needle = "la del dentista"
+        with patch.object(engine_mod, "ask_gpt", return_value=r_g_step):
+            tg, _, _, _ = engine.process_message(needle)
+        _assert_no_uuid_in_visible(tg, "smoke22G")
+        if len(engine._tasks.list_tasks()) != 2:
+            raise AssertionError("smoke22G nadie borrado")
+        by = {str(x.get("id")): x for x in engine._tasks.list_tasks()}
+        if by[id1].get("title") != "llamar a Luis":
+            raise AssertionError("smoke22G Luis")
+        if by[id2].get("title") != "llamar al dentista":
+            raise AssertionError("smoke22G dentista")
+        st_g = engine._thread_store.get_state()
+        if not st_g.get("open"):
+            raise AssertionError("smoke22G hilo abierto")
+        pg = st_g.get("pending") or {}
+        if pg.get("field") != "delete_confirmation":
+            raise AssertionError(f"smoke22G pending {pg!r}")
+        if str(pg.get("target") or "").strip() != id2:
+            raise AssertionError("smoke22G target dentist")
+        for rn in engine._notes.list_notes():
+            if needle in str(rn.get("content") or ""):
+                raise AssertionError(f"smoke22G nota accidental {rn!r}")
+
+    print("smoke 22 OK (borrado seguro de tareas v0.47.35)")
+
+
 def main() -> int:
     try:
         smoke_1_2_ambiguous_then_continue()
@@ -2425,6 +2721,7 @@ def main() -> int:
         smoke_19_continue_guard_no_note_task()
         smoke_20_task_complete_basic()
         smoke_21_clean_task_card_contract()
+        smoke_22_task_delete_safe()
     except AssertionError as e:
         print(f"FAIL: {e}", file=sys.stderr)
         return 1
