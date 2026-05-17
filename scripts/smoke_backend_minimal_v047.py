@@ -2701,6 +2701,277 @@ def smoke_22_task_delete_safe() -> None:
     print("smoke 22 OK (borrado seguro de tareas v0.47.35)")
 
 
+def smoke_23_task_update_basic() -> None:
+    """v0.47.36: ready/task/update persiste campos vía update_task."""
+    r_prior = "He marcado la tarea «llamar al banco» como prioritaria."
+
+    # --- CASO A: update directo priority ---
+    with tempfile.TemporaryDirectory() as d_a:
+        base = Path(d_a)
+        engine = _make_engine(base)
+        row = engine._tasks.add_task(
+            {"title": "llamar al banco", "priority": "normal"}
+        )
+        tid = str(row["id"])
+        r_a: dict[str, Any] = {
+            "s": "ready",
+            "i": "task",
+            "a": "update",
+            "obj": {"priority": "high"},
+            "target": tid,
+            "q": None,
+            "r": r_prior,
+            "pending": None,
+            "ctx": None,
+        }
+        with patch.object(engine_mod, "ask_gpt", return_value=r_a):
+            tv, cat, _, _ = engine.process_message("__upd_a__")
+        if r_prior not in (tv or ""):
+            raise AssertionError(f"smoke23A: {tv!r}")
+        if cat != "tarea":
+            raise AssertionError(f"smoke23A cat: {cat!r}")
+        lst = engine._tasks.list_tasks()
+        if len(lst) != 1:
+            raise AssertionError("smoke23A una sola tarea")
+        if str(lst[0].get("id")) != tid or lst[0].get("priority") != "high":
+            raise AssertionError(f"smoke23A task: {lst[0]!r}")
+        if engine._notes.list_notes() or engine._events.list_events():
+            raise AssertionError("smoke23A sin nota/evento")
+        if engine._thread_store.get_state().get("open"):
+            raise AssertionError("smoke23A hilo cerrado")
+
+    # --- CASO B: varios campos ---
+    r_b_vis = "He actualizado la tarea «llamar al banco»."
+    r_b: dict[str, Any] = {
+        "s": "ready",
+        "i": "task",
+        "a": "update",
+        "obj": {
+            "description": "preguntar por los seguros",
+            "date": "mañana",
+            "date_iso": "2026-05-18",
+            "time": "10:00",
+            "tags": ["Banco", "Seguro"],
+        },
+        "target": "<fill>",
+        "q": None,
+        "r": r_b_vis,
+        "pending": None,
+        "ctx": None,
+    }
+    with tempfile.TemporaryDirectory() as d_b:
+        base = Path(d_b)
+        engine = _make_engine(base)
+        rb_row = engine._tasks.add_task({"title": "llamar al banco"})
+        tid_b = str(rb_row["id"])
+        r_bf = dict(r_b)
+        r_bf["target"] = tid_b
+        with patch.object(engine_mod, "ask_gpt", return_value=r_bf):
+            tb, _, saved, _ = engine.process_message("__upd_b__")
+        if r_b_vis not in (tb or ""):
+            raise AssertionError(f"smoke23B: {tb!r}")
+        t = saved or engine._tasks.list_tasks()[0]
+        if t.get("description") != "preguntar por los seguros":
+            raise AssertionError(f"smoke23B desc {t!r}")
+        if str(t.get("date_text")) != "mañana":
+            raise AssertionError(f"smoke23B date_text {t!r}")
+        if str(t.get("date_iso")) != "2026-05-18":
+            raise AssertionError(f"smoke23B iso {t!r}")
+        if str(t.get("time_text")) != "10:00":
+            raise AssertionError(f"smoke23B time {t!r}")
+        tags = list(t.get("tags") or [])
+        if tags != ["Banco", "Seguro"]:
+            raise AssertionError(f"smoke23B tags {tags!r}")
+
+    # --- CASO C: sin target ---
+    r_c_m: dict[str, Any] = {
+        "s": "ready",
+        "i": "task",
+        "a": "update",
+        "obj": {"priority": "high"},
+        "target": None,
+        "q": None,
+        "r": None,
+        "pending": None,
+        "ctx": None,
+    }
+    with tempfile.TemporaryDirectory() as d_c:
+        base = Path(d_c)
+        engine = _make_engine(base)
+        engine._tasks.add_task({"title": "persistir prioridad"})
+        with patch.object(engine_mod, "ask_gpt", return_value=r_c_m):
+            tc, _, _, _ = engine.process_message("x")
+        if "concret" not in (tc or "").lower():
+            raise AssertionError(f"smoke23C: {tc!r}")
+        if any(
+            str(t.get("priority") or "") == "high"
+            for t in engine._tasks.list_tasks()
+        ):
+            raise AssertionError("smoke23C no high")
+        if engine._thread_store.get_state().get("open"):
+            raise AssertionError("smoke23C hilo cerrado")
+
+    # --- CASO D: obj vacío ---
+    with tempfile.TemporaryDirectory() as d_d:
+        base = Path(d_d)
+        engine = _make_engine(base)
+        rd = engine._tasks.add_task({"title": "sin cambios"})
+        tid_d = str(rd["id"])
+        r_d: dict[str, Any] = {
+            "s": "ready",
+            "i": "task",
+            "a": "update",
+            "obj": {},
+            "target": tid_d,
+            "q": None,
+            "r": None,
+            "pending": None,
+            "ctx": None,
+        }
+        with patch.object(engine_mod, "ask_gpt", return_value=r_d):
+            td, _, _, _ = engine.process_message("z")
+        if "cambiar" not in (td or "").lower():
+            raise AssertionError(f"smoke23D: {td!r}")
+        st = engine._tasks.list_tasks()[0]
+        if st.get("title") != "sin cambios":
+            raise AssertionError("smoke23D título intacto")
+
+    # --- CASO E: need_context → ready ---
+    r_e1: dict[str, Any] = {
+        "s": "need_context",
+        "i": "task",
+        "a": "update",
+        "obj": {"priority": "high"},
+        "target": None,
+        "q": None,
+        "r": None,
+        "pending": None,
+        "ctx": {
+            "domain": "tasks",
+            "query": "list_tasks",
+            "filters": {"title": "llamar al banco"},
+        },
+    }
+    with tempfile.TemporaryDirectory() as d_e:
+        base = Path(d_e)
+        engine = _make_engine(base)
+        er = engine._tasks.add_task(
+            {"title": "llamar al banco", "priority": "normal"}
+        )
+        tid_e = str(er["id"])
+        r_e2: dict[str, Any] = {
+            "s": "ready",
+            "i": "task",
+            "a": "update",
+            "obj": {"priority": "high"},
+            "target": tid_e,
+            "q": None,
+            "r": r_prior,
+            "pending": None,
+            "ctx": None,
+        }
+        seq_e = iter([r_e1, r_e2])
+
+        def fe(_p: dict[str, Any]) -> dict[str, Any] | None:
+            return next(seq_e)
+
+        with patch.object(engine_mod, "ask_gpt", side_effect=fe):
+            engine.process_message("__prioritaria_banco__")
+        te = engine._tasks.list_tasks()[0]
+        if te.get("priority") != "high":
+            raise AssertionError(f"smoke23E {te!r}")
+
+    # --- CASOS F + G: selección + update ---
+    q_sel = "He encontrado varias tareas. ¿Cuál quieres modificar?"
+    r_f1: dict[str, Any] = {
+        "s": "need_context",
+        "i": "task",
+        "a": "update",
+        "obj": {"priority": "high"},
+        "target": None,
+        "q": None,
+        "r": None,
+        "pending": None,
+        "ctx": {
+            "domain": "tasks",
+            "query": "list_tasks",
+            "filters": {"title": "llamar"},
+        },
+    }
+    with tempfile.TemporaryDirectory() as d_fg:
+        base = Path(d_fg)
+        engine = _make_engine(base)
+        t_luis = engine._tasks.add_task({"title": "llamar a Luis"})
+        t_banco = engine._tasks.add_task({"title": "llamar al banco"})
+        id1 = str(t_luis["id"])
+        id2 = str(t_banco["id"])
+        r_f2: dict[str, Any] = {
+            "s": "ask",
+            "i": "task",
+            "a": "update",
+            "obj": {},
+            "target": None,
+            "q": q_sel,
+            "r": None,
+            "pending": {
+                "field": "target_selection",
+                "original_action": "update",
+                "original_obj": {"priority": "high"},
+                "candidates": [
+                    {"id": id1, "label": "llamar a Luis"},
+                    {"id": id2, "label": "llamar al banco"},
+                ],
+            },
+            "ctx": None,
+        }
+        seq_f = iter([r_f1, r_f2])
+
+        def ff(_p: dict[str, Any]) -> dict[str, Any] | None:
+            return next(seq_f)
+
+        with patch.object(engine_mod, "ask_gpt", side_effect=ff):
+            tf, _, _, _ = engine.process_message("__prior_llamar__")
+        _assert_no_uuid_in_visible(tf, "smoke23F")
+        if tf.strip() != q_sel:
+            raise AssertionError(f"smoke23F q: {tf!r}")
+        for t in engine._tasks.list_tasks():
+            if t.get("priority") == "high":
+                raise AssertionError("smoke23F nadie prioritario aún")
+        st_f = engine._thread_store.get_state()
+        if not st_f.get("open"):
+            raise AssertionError("smoke23F abierto")
+        if (st_f.get("pending") or {}).get("field") != "target_selection":
+            raise AssertionError(f"smoke23F pend {st_f!r}")
+
+        needle = "la del banco"
+        r_g: dict[str, Any] = {
+            "s": "ready",
+            "i": "task",
+            "a": "update",
+            "obj": {"priority": "high"},
+            "target": id2,
+            "q": None,
+            "r": r_prior,
+            "pending": None,
+            "ctx": None,
+        }
+        with patch.object(engine_mod, "ask_gpt", return_value=r_g):
+            tg, _, _, _ = engine.process_message(needle)
+        _assert_no_uuid_in_visible(tg, "smoke23G")
+        by_id = {str(x.get("id")): x for x in engine._tasks.list_tasks()}
+        if by_id[id2].get("priority") != "high":
+            raise AssertionError("smoke23G banco high")
+        if by_id[id1].get("priority") != "normal":
+            raise AssertionError(f"smoke23G Luis sigue normal {by_id[id1]!r}")
+        for rn in engine._notes.list_notes():
+            if needle in str(rn.get("content") or ""):
+                raise AssertionError(f"smoke23G nota {rn!r}")
+        if engine._thread_store.get_state().get("open"):
+            raise AssertionError("smoke23G cerrado")
+
+    print("smoke 23 OK (actualización básica de tareas v0.47.36)")
+
+
 def main() -> int:
     try:
         smoke_1_2_ambiguous_then_continue()
@@ -2722,6 +2993,7 @@ def main() -> int:
         smoke_20_task_complete_basic()
         smoke_21_clean_task_card_contract()
         smoke_22_task_delete_safe()
+        smoke_23_task_update_basic()
     except AssertionError as e:
         print(f"FAIL: {e}", file=sys.stderr)
         return 1

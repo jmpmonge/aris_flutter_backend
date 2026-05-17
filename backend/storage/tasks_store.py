@@ -64,6 +64,11 @@ def _normalize_task_tags(v: Any) -> list[str]:
     return out
 
 
+_TASK_PATCH_KEYS = frozenset(
+    {"title", "description", "date_text", "date_iso", "time_text", "priority", "tags", "completed"}
+)
+
+
 class TasksStore:
     """Lista de tareas en backend/data/tasks.json."""
 
@@ -113,7 +118,7 @@ class TasksStore:
             return None
 
         cur = dict(items[idx])
-        patch = {k: v for k, v in updates.items() if k not in ("id", "created_at")}
+        patch = {k: v for k, v in updates.items() if k in _TASK_PATCH_KEYS}
 
         if "title" in patch:
             t = str(patch.get("title") or "").strip()

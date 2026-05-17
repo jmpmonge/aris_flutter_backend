@@ -219,6 +219,8 @@ class ArisMinimalEngine:
         if a == "update":
             if i == "event":
                 return self._handle_ready_update_event(result)
+            if i == "task":
+                return self._handle_ready_update_task(result)
             self._thread_store.clear_state()
             return (_MSG_UNSUPPORTED_MODIFY, "consulta", None, None)
 
@@ -380,6 +382,72 @@ class ArisMinimalEngine:
         self._thread_store.clear_state()
         return (
             _reply_done("He marcado la tarea como completada."),
+            "tarea",
+            updated,
+            None,
+        )
+
+    def _handle_ready_update_task(
+        self, result: dict[str, Any]
+    ) -> tuple[str, str, dict[str, Any] | None, str | None]:
+        r_raw = result.get("r")
+
+        def _reply_saved(default: str) -> str:
+            if isinstance(r_raw, str):
+                cleaned = sanitize_visible_text(r_raw)
+                if cleaned:
+                    return cleaned
+            return default
+
+        obj_raw = result.get("obj")
+        obj: dict[str, Any] = obj_raw if isinstance(obj_raw, dict) else {}
+
+        tid = extract_event_target_id(result)
+        if not tid:
+            self._thread_store.clear_state()
+            return (
+                "No sé qué tarea quieres modificar. ¿Puedes concretarla?",
+                "consulta",
+                None,
+                None,
+            )
+
+        cur = next(
+            (t for t in self._tasks.list_tasks() if str(t.get("id")) == tid),
+            None,
+        )
+        if cur is None:
+            self._thread_store.clear_state()
+            return (
+                "No encuentro esa tarea en tu lista.",
+                "consulta",
+                None,
+                None,
+            )
+
+        updates = self._task_updates_from_obj(obj)
+        if not updates:
+            self._thread_store.clear_state()
+            return (
+                "No veo qué quieres cambiar de la tarea.",
+                "consulta",
+                None,
+                None,
+            )
+
+        try:
+            updated = self._tasks.update_task(tid, updates)
+        except ValueError:
+            self._thread_store.clear_state()
+            return ("No he podido actualizar esa tarea.", "consulta", None, None)
+
+        if updated is None:
+            self._thread_store.clear_state()
+            return ("No he podido actualizar esa tarea.", "consulta", None, None)
+
+        self._thread_store.clear_state()
+        return (
+            _reply_saved("He actualizado la tarea."),
             "tarea",
             updated,
             None,
@@ -666,6 +734,72 @@ class ArisMinimalEngine:
         for k in ("date_text", "time_text", "location", "description"):
             if out.get(k) == "":
                 out[k] = None
+        return out
+
+    @staticmethod
+    def _task_updates_from_obj(obj: dict[str, Any]) -> dict[str, Any]:
+        """Campos permitidos para persistir vía **task**/ **update** — sin semántica GPT extra."""
+        if not isinstance(obj, dict):
+            return {}
+        out: dict[str, Any] = {}
+
+        if "title" in obj:
+            t = str(obj.get("title") or "").strip()
+            if t:
+                out["title"] = t
+
+        if "description" in obj:
+            dv = obj.get("description")
+            if dv is None:
+                out["description"] = None
+            else:
+                s = str(dv).strip()
+                out["description"] = s if s else None
+
+        if "date_text" in obj or "date" in obj:
+            dt_val = (
+                obj.get("date_text") if "date_text" in obj else obj.get("date")
+            )
+            if dt_val is None:
+                out["date_text"] = None
+            else:
+                ds = str(dt_val).strip()
+                out["date_text"] = ds if ds else None
+
+        if "date_iso" in obj or "dateISO" in obj:
+            raw = obj.get("date_iso") if "date_iso" in obj else obj.get("dateISO")
+            if raw is None or (
+                isinstance(raw, str) and str(raw).strip() == ""
+            ):
+                out["date_iso"] = None
+            else:
+                norm = ArisMinimalEngine._coerce_date_iso_raw(raw)
+                if norm is not None:
+                    out["date_iso"] = norm
+
+        if "time_text" in obj or "time" in obj:
+            tm = obj.get("time_text") if "time_text" in obj else obj.get("time")
+            if tm is None:
+                out["time_text"] = None
+            else:
+                ts = str(tm).strip()
+                out["time_text"] = ts if ts else None
+
+        if "priority" in obj:
+            pr = obj.get("priority")
+            if pr is None or str(pr).strip() == "":
+                out["priority"] = "normal"
+            else:
+                ps = str(pr).strip().lower()
+                out["priority"] = "high" if ps == "high" else "normal"
+
+        if "tags" in obj:
+            traw = obj.get("tags")
+            if isinstance(traw, list):
+                out["tags"] = [str(x).strip() for x in traw if str(x).strip()]
+            else:
+                out["tags"] = []
+
         return out
 
     @staticmethod
