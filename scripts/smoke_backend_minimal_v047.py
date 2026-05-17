@@ -4243,6 +4243,250 @@ def smoke_29_normalize_complete_create_ask() -> None:
     print("smoke 29 OK (normalize ask/create completo v0.47.36.6)")
 
 
+def smoke_30_last_focus_does_not_dominate_new_event_card() -> None:
+    """v0.47.36.7 — last_focus no debe mandar sobre ficha nueva de evento (mocks GPT)."""
+
+    def _prep_luis_foco(eng: ArisMinimalEngine) -> tuple[str, dict[str, Any]]:
+        row_luis = eng._events.add_event(
+            {
+                "title": "cita con Luis",
+                "date_text": "miércoles",
+                "date_iso": "2026-05-20",
+                "time_text": "20:00",
+                "participants": ["Luis"],
+                "description": None,
+                "location": None,
+                "duration_minutes": None,
+            }
+        )
+        lid = str(row_luis["id"])
+        now = str(row_luis.get("updated_at") or "2026-05-17T12:00:00Z")
+        lf_blob: dict[str, Any] = {
+            "domain": "event",
+            "id": lid,
+            "label": "cita con Luis",
+            "object": dict(row_luis),
+            "updated_at": now,
+        }
+        eng._thread_store.save_state({"open": False, "last_focus": lf_blob})
+        return lid, row_luis
+
+    # --- A: nueva ficha clara → create nuevo (Pedro); Luis intacto; foco nuevo ---
+    r_pedro: dict[str, Any] = {
+        "s": "ready",
+        "i": "event",
+        "a": "create",
+        "obj": {
+            "cal_title": "cita con Pedro",
+            "cal_date_text": "jueves",
+            "cal_date_iso": "2026-05-21",
+            "cal_time_text": "20:00",
+            "cal_people": ["Pedro"],
+            "cal_location": None,
+            "cal_description": None,
+            "cal_duration_minutes": None,
+        },
+        "target": None,
+        "q": None,
+        "r": (
+            "He guardado la cita con Pedro para el jueves a las 20:00."
+        ),
+        "pending": None,
+        "ctx": None,
+    }
+
+    with tempfile.TemporaryDirectory() as d_a:
+        base = Path(d_a)
+        eng_a = _make_engine(base)
+        lid_a, _ = _prep_luis_foco(eng_a)
+
+        with patch.object(engine_mod, "ask_gpt", return_value=r_pedro):
+            vis_a, _, sav_a, _ = eng_a.process_message(
+                "eventa para el jueves a las 20h con Pedro"
+            )
+
+        vlc = (vis_a or "").lower()
+        if (
+            ("misma hora" in vlc and "cita anterior" in vlc)
+            or "misma hora que la cita anterior" in vlc
+        ):
+            raise AssertionError(
+                f"smoke30A pregunta inaceptable (foco viejo sobre ficha nueva): {vis_a!r}"
+            )
+        _assert_no_uuid_in_visible(str(vis_a or ""), "smoke30A")
+
+        events_a = eng_a._events.list_events()
+        if len(events_a) != 2:
+            raise AssertionError(f"smoke30A debe haber 2 eventos {events_a!r}")
+
+        lu = eng_a._events.get_event_by_id(lid_a)
+        if lu is None or str(lu.get("time_text")) != "20:00":
+            raise AssertionError(f"smoke30A Luis intacto mal {lu!r}")
+        if str(lu.get("title")) != "cita con Luis":
+            raise AssertionError(f"smoke30A título Luis {lu!r}")
+
+        if sav_a is None:
+            raise AssertionError("smoke30A sin resultado create")
+        if str(sav_a.get("title")) != "cita con Pedro":
+            raise AssertionError(f"smoke30A título Pedro {sav_a!r}")
+        if list(sav_a.get("participants") or []) != ["Pedro"]:
+            raise AssertionError(f"smoke30A people {sav_a!r}")
+        if str(sav_a.get("date_text")) != "jueves":
+            raise AssertionError(f"smoke30A date_text {sav_a!r}")
+        if str(sav_a.get("date_iso")) != "2026-05-21":
+            raise AssertionError(f"smoke30A iso {sav_a!r}")
+        if str(sav_a.get("time_text")) != "20:00":
+            raise AssertionError(f"smoke30A time {sav_a!r}")
+
+        sta = eng_a._thread_store.get_state()
+        if sta.get("open"):
+            raise AssertionError("smoke30A hilo cerrado esperado")
+        lfa = sta.get("last_focus") or {}
+        if lfa.get("domain") != "event":
+            raise AssertionError(f"smoke30A lf dominio {lfa!r}")
+        if "pedro" not in str(lfa.get("label") or "").lower():
+            raise AssertionError(f"smoke30A lf debe apuntar a Pedro {lfa!r}")
+
+        laa = sta.get("last_action") or {}
+        if laa.get("domain") != "event" or laa.get("action") != "create":
+            raise AssertionError(f"smoke30A la {laa!r}")
+
+    # --- B: anáfora válida sobre last_focus (Luis) → update ---
+    r_up_luis: dict[str, Any] = {
+        "s": "ready",
+        "i": "event",
+        "a": "update",
+        "target": "",
+        "obj": {"cal_time_text": "21:00"},
+        "q": None,
+        "r": "He cambiado la cita con Luis a las 21:00.",
+        "pending": None,
+        "ctx": None,
+    }
+
+    with tempfile.TemporaryDirectory() as d_b:
+        base = Path(d_b)
+        eng_b = _make_engine(base)
+        lid_b, _ = _prep_luis_foco(eng_b)
+        rd = dict(r_up_luis)
+        rd["target"] = lid_b
+
+        with patch.object(engine_mod, "ask_gpt", return_value=rd):
+            _, _, sav_b, _ = eng_b.process_message("cámbiala a las 21")
+
+        if sav_b is None or str(sav_b.get("id")) != lid_b:
+            raise AssertionError(f"smoke30B update esperado Luis {sav_b!r}")
+        if str(sav_b.get("time_text")) != "21:00":
+            raise AssertionError(f"smoke30B hora {sav_b!r}")
+        if len(eng_b._events.list_events()) != 1:
+            raise AssertionError("smoke30B sólo Luis")
+
+        stb = eng_b._thread_store.get_state()
+        lfb = stb.get("last_focus") or {}
+        lab = stb.get("last_action") or {}
+        if str(lfb.get("id")) != lid_b:
+            raise AssertionError(f"smoke30B lf id {lfb!r}")
+        if lab.get("domain") != "event" or lab.get("action") != "update":
+            raise AssertionError(f"smoke30B la {lab!r}")
+
+    # --- C: GPT duda — ask completo con ambas alternativas; no crear aún ---
+    r_ask_both: dict[str, Any] = {
+        "s": "ask",
+        "i": "event",
+        "a": "create",
+        "obj": {
+            "cal_title": "cita con Pedro",
+            "cal_date_text": "jueves",
+            "cal_time_text": "20:00",
+            "cal_people": ["Pedro"],
+        },
+        "target": None,
+        "q": (
+            "¿Quieres crear una nueva cita con Pedro para el jueves a las "
+            "20:00, o modificar la cita anterior con Luis?"
+        ),
+        "r": None,
+        "pending": {
+            "field": "new_or_focus",
+            "options": ["crear nueva cita", "modificar cita anterior"],
+        },
+        "ctx": None,
+    }
+
+    with tempfile.TemporaryDirectory() as d_c:
+        base = Path(d_c)
+        eng_c = _make_engine(base)
+        _prep_luis_foco(eng_c)
+
+        with patch.object(engine_mod, "ask_gpt", return_value=r_ask_both):
+            qc, _, nc, _ = eng_c.process_message(
+                "eventa para el jueves a las 20h con Pedro"
+            )
+
+        if len(eng_c._events.list_events()) != 1:
+            raise AssertionError("smoke30C no debe crear segundo evento aún")
+
+        sc = eng_c._thread_store.get_state()
+        if not sc.get("open"):
+            raise AssertionError("smoke30C thread abierto")
+        qq = (qc or "").lower().strip()
+        if "pedro" not in qq:
+            raise AssertionError(f"smoke30C q debe nombrar Pedro {qc!r}")
+        if "luis" not in qq and "anterior" not in qq:
+            raise AssertionError(
+                f"smoke30C q debe nombrar alternativa anterior/Luis {qc!r}"
+            )
+        if "misma hora" in qq and (
+            "pedro" not in qq or ("nueva" not in qq and "crear" not in qq)
+        ):
+            raise AssertionError(f"smoke30C q demasiado acotado al foco {qc!r}")
+
+    # --- D: cobertura v0.47.36.6 — ask/create + ISO → normaliza y crea ---
+    rd_norm: dict[str, Any] = {
+        "s": "ask",
+        "i": "event",
+        "a": "create",
+        "obj": {
+            "cal_title": "cita con Marco",
+            "cal_date_text": "miércoles",
+            "cal_date_iso": "2026-05-20",
+            "cal_time_text": "10:00",
+            "cal_people": ["Marco"],
+            "cal_location": None,
+            "cal_description": None,
+            "cal_duration_minutes": None,
+        },
+        "target": None,
+        "q": "¿confirmas día exacto?",
+        "r": "He guardado la cita con Marco para el miércoles a las 10:00.",
+        "pending": {"field": "confirmation"},
+        "ctx": None,
+    }
+
+    with tempfile.TemporaryDirectory() as d_d:
+        base = Path(d_d)
+        eng_d = _make_engine(base)
+        with patch.object(engine_mod, "ask_gpt", return_value=rd_norm):
+            vis_d, _, sav_d, _ = eng_d.process_message(
+                "cita con Marco el miércoles a las 10 de la mañana"
+            )
+        vdl = (vis_d or "").lower()
+        if (
+            ("refieres" in vdl or "¿te refieres" in vdl)
+            and "¿" in (vis_d or "")
+        ):
+            raise AssertionError(f"smoke30D no debía quedar esa pregunta {vis_d!r}")
+        if sav_d is None:
+            raise AssertionError("smoke30D debe crear tras normalización")
+        if str(sav_d.get("title")) != "cita con Marco":
+            raise AssertionError(f"smoke30D tit {sav_d!r}")
+        eds = eng_d._events.list_events()
+        if len(eds) != 1:
+            raise AssertionError(f"smoke30D count {eds!r}")
+
+    print("smoke 30 OK (last_focus prudente v0.47.36.7)")
+
+
 def main() -> int:
     try:
         smoke_1_2_ambiguous_then_continue()
@@ -4271,6 +4515,7 @@ def main() -> int:
         smoke_27_last_focus_last_action_and_no_false_success()
         smoke_28_calendar_event_requires_iso_for_civil_integration()
         smoke_29_normalize_complete_create_ask()
+        smoke_30_last_focus_does_not_dominate_new_event_card()
     except AssertionError as e:
         print(f"FAIL: {e}", file=sys.stderr)
         return 1
