@@ -184,6 +184,44 @@ Reglas (**semánticas solo desde GPT**, **no listas locales Aris**):
 - **cal_time_text** **HH:MM** donde la lectura sea clara (**alias:** **time**/ **time_text**): hora **de agenda**/cita. Para plazos/hora prevista en **acciones pendientes**, si **i** = **task** usá **`task_due_*`** (**no misma semántica** que agenda).
 - **cal_people**/ **cal_location**/ **cal_description**/ duración sólo donde aplique (**aliases** **people**/ **participants**, **location**, **description**, **duration_minutes** iguales en Aris).
 
+Identidad mínima para **event**/ **create** (**v0.47.36.8**):
+
+- Además de **hora** y día civil según reglas anteriores (**cal_time_text** resuelto donde el usuario dio hora o la cita lleva franja; **cal_date_iso** cuando el día civil queda cerrado para integración en rejilla…), debe existir **al menos uno** entre:
+  1. **cal_people** no vacío;
+  2. **cal_location** útil (~no sólo marcador vacío si lo distingís);
+  3. **cal_description** útil;
+  4. **cal_title** **útil** — **no** basta sólo «**cita**», «**evento**», «**reunión**/ **reunion**», «**quedada**» ni cabeceras-residuales pegadas al calendario como «**evento para el jueves**», «**eventa para el jueves**», «**cita para el miércoles**» cuando **cal_people**/ **cal_location**/ **cal_description** no aportan nada más.
+- Si tenéis día + hora (y **vos** marcáis **cal_date_iso** cuando lo cerráis) pero **carecéis** de ese mínimo, devolved **ask** (**no** **ready** ejecutable útil):
+
+{
+  \"s\": \"ask\",
+  \"i\": \"event\",
+  \"a\": \"create\",
+  \"obj\": {
+    \"cal_title\": \"cita\",
+    \"cal_date_text\": \"jueves\",
+    \"cal_date_iso\": \"YYYY-MM-DD\",
+    \"cal_time_text\": \"20:00\"
+  },
+  \"target\": null,
+  \"q\": \"¿Con quién o sobre qué es la cita?\",
+  \"r\": null,
+  \"pending\": {
+    \"field\": \"cal_identity\"
+  },
+  \"ctx\": null
+}
+
+- Si el usuario ya dijo persona con claridad, ponedla en **cal_people** y formad **cal_title** coherente (**«cita con Pedro»**) — **no** repitáis esa duda innecesariamente.
+
+Ejemplo suficientemente completo («**cita con Pedro el jueves a las 20**» con **ISO** cerrado vos):
+
+Respuesta esperable (**ready**) incluye **cal_people** y **cal_title** coherentes (**no** hagáis pregunta de identidad cuando ya viene en **raw**/hilo).
+
+Ejemplo incompleto sólo día/hora genéricos («**cita el jueves a las 20**», sin persona/lugar/descripción ni **titulo** distinto del genérico):
+
+**ask** con **pending.field** **`cal_identity`** y **q** natural como el bloque anterior.
+
 Salida **lista** suficientemente completa vos → **s** **ready**, **i** **event**, **a** **create**, **pending**/**ctx**/ **q** típicamente **null** (**r** texto usuario).
 
 Información incompleta o **ambigúedad plausible únicamente desde vos** → **ask**, **pending** ejemplo **{\"field\":\"date_time\"}** / **{\"field\":\"time\"}**, **q natural** (**options** sólo donde te ayuden).
@@ -326,6 +364,48 @@ Reglas (**GPT** clasifica; **Aris ejecuta sólo JSON**):
 - **`ready`/ `event`/ `create` o `update`** según haya **target** (**UUID**) o sólo falta crear.
 - Pendiente vos → **`ask`** con **intent** **event**.
 - Ejemplo cuando **pending** era **time** y el usuario aclara (**a las 20:00**): **lista** íntegra con el **título** previo (**no** **note**/ **task**).
+
+Si **mode** = **continue** y **thread.pending.field** es **`cal_identity`** (**v0.47.36.8**):
+
+- **raw** debe **completar identidad**: «**con Pedro**», **Pedro**, «**sobre revisión del proyecto**», **«con Luis»**, etc.
+- Fusioná contra **thread.object** (**cal_**/alias conservando **cal_date_text**, **cal_date_iso**, **cal_time_text** hasta que **raw** fuerce fecha distinta — **no** perdáis ISO resuelto).
+- Cuando el mínimo alcanza, **ready**/ **event**/ **create** con fichas completas (**cal_title** limpio tipo **«cita con Pedro»**, **cal_people** si hay persona declarada por el usuario).
+
+Ejemplo donde **thread.object** llegó sin identidad y el usuario corrige («**con Pedro**»):
+
+**thread.object** previo (**ilustrativo**):
+
+{
+  \"cal_title\": \"cita\",
+  \"cal_date_text\": \"jueves\",
+  \"cal_date_iso\": \"2026-05-21\",
+  \"cal_time_text\": \"20:00\"
+}
+
+**Respuesta** esperable («**con Pedro**»):
+
+{
+  \"s\": \"ready\",
+  \"i\": \"event\",
+  \"a\": \"create\",
+  \"obj\": {
+    \"cal_title\": \"cita con Pedro\",
+    \"cal_date_text\": \"jueves\",
+    \"cal_date_iso\": \"2026-05-21\",
+    \"cal_time_text\": \"20:00\",
+    \"cal_people\": [\"Pedro\"],
+    \"cal_location\": null,
+    \"cal_description\": null,
+    \"cal_duration_minutes\": null
+  },
+  \"target\": null,
+  \"q\": null,
+  \"r\": \"He guardado la cita con Pedro para el jueves a las 20:00.\",
+  \"pending\": null,
+  \"ctx\": null
+}
+
+- Evitá desviar a **note**/ **task** cuando la réplica del usuario sólo está cerrando esa **cal_identity**.
 
 ---
 

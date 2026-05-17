@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from copy import deepcopy
 from typing import Any
 
@@ -41,7 +42,20 @@ _MSG_FAIL_FALLBACK = (
 _MSG_ANSWER_FALSE_MUTATION = "No he ejecutado ningún cambio en este turno."
 _MAX_CONTEXT_NEED_CONTEXT_DEPTH = 8
 
+_MSG_EVENT_CAL_IDENTITY = "¿Con quién o sobre qué es la cita?"
+_MSG_EVENT_CAL_DATE_ISO = "¿Qué fecha exacta corresponde a ese día?"
+
 _DATE_ISO_BASIC_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+_GENERIC_EVENT_TITLE_TOKENS: frozenset[str] = frozenset(
+    {"cita", "evento", "reunion", "quedada"}
+)
+_GENERIC_EVENT_TITLE_PREFIXES: tuple[str, ...] = (
+    "evento para ",
+    "eventa para ",
+    "cita para ",
+    "reunion para ",
+)
 
 # Subcadenas (español) que no deben figurar como **consulta informática** cuando no hubo
 # mutación persistida (**s**=answer sin ejecución de store previa en ese turno).
@@ -214,8 +228,120 @@ class ArisMinimalEngine:
     )
 
     @staticmethod
+    def _ascii_fold_lower(s: str) -> str:
+        return unicodedata.normalize(
+            "NFKD", s
+        ).encode("ascii", "ignore").decode("ascii").lower()
+
+    @staticmethod
+    def _is_generic_event_title(title: Any) -> bool:
+        """Sin semántica de **raw**: sólo calidad técnica de un título ya estructurado."""
+        if title is None:
+            return True
+        raw = str(title).strip()
+        if not raw:
+            return True
+        compact = " ".join(
+            ArisMinimalEngine._ascii_fold_lower(raw).split()
+        )
+        if compact in _GENERIC_EVENT_TITLE_TOKENS:
+            return True
+        for p in _GENERIC_EVENT_TITLE_PREFIXES:
+            if compact.startswith(p):
+                return True
+        return False
+
+    @staticmethod
+    def _event_payload_has_calendar_slot_without_iso(
+        ev_payload: dict[str, Any],
+    ) -> bool:
+        if not isinstance(ev_payload, dict):
+            return False
+        dt_raw = ev_payload.get("date_text")
+        tm_raw = ev_payload.get("time_text")
+        dt_ok = dt_raw is not None and bool(str(dt_raw).strip())
+        tm_ok = tm_raw is not None and bool(str(tm_raw).strip())
+        iso = ev_payload.get("date_iso")
+        iso_miss = iso is None or (
+            isinstance(iso, str) and not str(iso).strip()
+        )
+        return dt_ok and tm_ok and iso_miss
+
+    @staticmethod
+    def _event_create_has_minimal_identity(ev_payload: dict[str, Any]) -> bool:
+        """Identidad técnica mínima antes de persistir **event**/ **create**."""
+        if not isinstance(ev_payload, dict):
+            return False
+        pr = ev_payload.get("participants")
+        if isinstance(pr, list) and any(str(p).strip() for p in pr):
+            return True
+        loc = ev_payload.get("location")
+        if loc is not None and str(loc).strip():
+            return True
+        desc = ev_payload.get("description")
+        if desc is not None and str(desc).strip():
+            return True
+        ttl = ev_payload.get("title")
+        if ttl is not None and str(ttl).strip():
+            return not ArisMinimalEngine._is_generic_event_title(ttl)
+        return False
+
+    @staticmethod
+    def _build_missing_event_identity_ask(
+        original_obj: Any,
+        _ev_payload: dict[str, Any],
+    ) -> tuple[str, dict[str, Any]]:
+        merged = (
+            dict(original_obj) if isinstance(original_obj, dict) else {}
+        )
+        return (_MSG_EVENT_CAL_IDENTITY, merged)
+
+    def _suspend_event_create_missing_calendar_iso(
+        self,
+        original_obj: dict[str, Any],
+        _ev_payload: dict[str, Any],
+    ) -> tuple[str, str, None, None]:
+        q_iso = _MSG_EVENT_CAL_DATE_ISO
+        merged: dict[str, Any] = (
+            dict(original_obj) if isinstance(original_obj, dict) else {}
+        )
+        self._thread_store.save_state(
+            {
+                "open": True,
+                "intent": "event",
+                "action": "create",
+                "object": merged,
+                "last_question": q_iso,
+                "pending": {"field": "cal_date_iso"},
+                "target": None,
+            }
+        )
+        return (q_iso, "ambiguo", None, None)
+
+    def _suspend_event_create_missing_identity(
+        self,
+        original_obj: dict[str, Any],
+        _ev_payload: dict[str, Any],
+    ) -> tuple[str, str, None, None]:
+        q_id, merged = ArisMinimalEngine._build_missing_event_identity_ask(
+            original_obj, _ev_payload
+        )
+        self._thread_store.save_state(
+            {
+                "open": True,
+                "intent": "event",
+                "action": "create",
+                "object": merged,
+                "last_question": q_id,
+                "pending": {"field": "cal_identity"},
+                "target": None,
+            }
+        )
+        return (q_id, "ambiguo", None, None)
+
+    @staticmethod
     def _is_complete_event_create_obj(obj: dict[str, Any]) -> bool:
-        """Ficha técnica mínima para **event**/ **create** ejecutable civil + hora."""
+        """Ficha técnica mínima: civil + hora + **identidad útil del evento** (**v0.47.36.8**)."""
         if not isinstance(obj, dict):
             return False
         raw_title = obj.get("cal_title")
@@ -236,7 +362,12 @@ class ArisMinimalEngine:
         if tm_raw is None or str(tm_raw).strip() == "":
             tm_raw = obj.get("time")
         time_s = str(tm_raw).strip() if tm_raw is not None else ""
-        return bool(time_s)
+        if not time_s:
+            return False
+        ep = ArisMinimalEngine._event_payload(obj)
+        if ep is None:
+            return False
+        return ArisMinimalEngine._event_create_has_minimal_identity(ep)
 
     @staticmethod
     def _is_complete_task_create_obj(obj: dict[str, Any]) -> bool:
@@ -917,10 +1048,11 @@ class ArisMinimalEngine:
             return default
 
         if i == "event":
-            ev_payload = self._event_payload(obj)
+            obj_d = obj if isinstance(obj, dict) else {}
+            ev_payload = self._event_payload(obj_d)
             if isinstance(ev_payload, dict):
                 src_evt_iso = ArisMinimalEngine._coerce_date_iso_from_keys(
-                    obj,
+                    obj_d,
                     ("cal_date_iso", "date_iso", "dateISO"),
                 )
                 # Parche técnico: **cal_date_iso**/alias presente válido debe terminar como **date_iso** en persistencia.
@@ -932,7 +1064,23 @@ class ArisMinimalEngine:
                     ev_payload["date_iso"] = src_evt_iso
             if ev_payload is None:
                 self._thread_store.clear_state()
-                return ("No he podido guardar el evento: falta un título.", "consulta", None, None)
+                return (
+                    "No he podido guardar el evento: falta un título.",
+                    "consulta",
+                    None,
+                    None,
+                )
+
+            if self._event_payload_has_calendar_slot_without_iso(ev_payload):
+                return self._suspend_event_create_missing_calendar_iso(
+                    obj_d, ev_payload
+                )
+
+            if not self._event_create_has_minimal_identity(ev_payload):
+                return self._suspend_event_create_missing_identity(
+                    obj_d, ev_payload
+                )
+
             try:
                 saved = self._events.add_event(ev_payload)
             except ValueError:
