@@ -1,14 +1,14 @@
-"""API FastAPI mínima — Aris backend v0.47.15 (POST /message → engine)."""
+"""API FastAPI mínima — Aris backend (POST /message → engine; PATCH tareas v0.47.31)."""
 
 from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.core.engine import ArisMinimalEngine
-from backend.models.schemas import AssistantResponse, UserMessage
+from backend.models.schemas import AssistantResponse, TaskPatchBody, UserMessage
 from backend.storage.events_store import EventsStore
 from backend.storage.notes_store import NotesStore
 from backend.storage.tasks_store import TasksStore
@@ -45,7 +45,7 @@ def health() -> dict[str, str]:
     return {
         "status": "ok",
         "backend": "minimal",
-        "version": "v0.47.15",
+        "version": "v0.47.31",
     }
 
 
@@ -57,6 +57,25 @@ def list_events() -> list[dict[str, Any]]:
 @app.get("/tasks")
 def list_tasks() -> list[dict[str, Any]]:
     return tasks_store.list_tasks()
+
+
+@app.patch("/tasks/{task_id}/complete")
+def patch_task_complete_alias(task_id: str) -> dict[str, Any]:
+    """Compat cliente: PATCH con cuerpo `{}` marca completada (equiv. a `completed: true`)."""
+    row = tasks_store.complete_task(task_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Tarea no encontrada")
+    return row
+
+
+@app.patch("/tasks/{task_id}")
+def patch_task(task_id: str, body: TaskPatchBody) -> dict[str, Any]:
+    """Actualiza `title` y/o `completed` sin pasar por GPT."""
+    updates = body.to_store_updates()
+    row = tasks_store.update_task(task_id, updates)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Tarea no encontrada")
+    return row
 
 
 @app.get("/notes")
