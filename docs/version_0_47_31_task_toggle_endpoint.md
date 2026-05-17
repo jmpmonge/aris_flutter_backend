@@ -2,67 +2,55 @@
 
 ## 1. Objetivo
 
-Permitir que Flutter marque o desmarque tareas mediante un endpoint HTTP directo, sin pasar por GPT.
+Permitir que Flutter marque o desmarque tareas directamente en el backend sin pasar por GPT.
 
 ## 2. Diseño
 
-No hay decisión semántica en servidor para este flujo:
+No hay decisión semántica:
 
-- Flutter conoce `task_id` desde GET `/tasks`.
+- Flutter ya tiene `task_id` (p. ej. desde GET `/tasks`).
 - El usuario toca el checkbox.
-- El backend actualiza el campo `completed` en el JSON persistente.
+- El backend actualiza sólo el booleano `completed`.
+- GPT no interviene; no hay interpretación de texto.
 
-## 3. Endpoints
-
-### Principal
+## 3. Endpoint
 
 **PATCH** `/tasks/{task_id}`
 
-Cuerpo JSON (al menos uno de los dos campos):
-
-- `completed` (bool): marcar o desmarcar.
-- `title` (string): edición de título (mismo método que ya usaba el cliente para renombrar).
-
-Ejemplos:
+Body (único campo permitido en esta versión):
 
 ```json
 { "completed": true }
 ```
 
+También admite:
+
 ```json
 { "completed": false }
 ```
 
-```json
-{ "title": "nuevo título" }
-```
+Respuesta: objeto tarea completo persistido (misma forma que en GET `/tasks`).
 
-Respuesta: objeto tarea actualizado (misma forma que en GET `/tasks`).
+Errores:
 
-**404** si el `task_id` no existe.
+- **404** si la tarea no existe.
+- **422** / **400** si el body no es un booleano válido para `completed` (p. ej. `"completed": "sí"`).
 
-### Compatibilidad (cliente antiguo)
+No existe en v0.47.31 endpoint REST para cambiar **título** u otros campos de la tarea (queda fuera de alcance).
 
-**PATCH** `/tasks/{task_id}/complete`
+## 4. Fuera de alcance
 
-Cuerpo: `{}`. Equivale a marcar la tarea como completada (`completed: true`). Misma respuesta que PATCH principal.
+- Borrar tareas.
+- Modificar título, descripción, fecha, hora, prioridad o etiquetas por REST en esta versión.
+- Crear tarea manual por REST desde Flutter (`v0.47.32` u otra versión).
+- Completar varias tareas a la vez.
+- Mail, cambios en contrato GPT.
 
-## 4. Cliente Flutter (v0.47.31)
-
-`ApiClient.patchTaskCompletion` llama a **PATCH** `/tasks/{id}` con `{"completed": bool}`.
-
-Se deja de usar **PATCH** `/tasks/{id}/complete` con cuerpo vacío por defecto.
-
-## 5. Fuera de alcance
-
-- Borrar tareas (DELETE distinto).
-- Completar varias a la vez.
-- Mail, GPT.
-
-## 6. Validación
+## 5. Validación
 
 ```bash
 python3 scripts/smoke_backend_minimal_v047.py
+python3 scripts/smoke_backend_http_v047.py
 ```
 
-Prueba en dispositivo: lista GET → checkbox → sin mensaje de error rojo; marcar y desmarcar.
+En app: pantalla Tareas con datos GET → checkbox marcar/desmarcar → sin mensaje rojo de error de red/backend.

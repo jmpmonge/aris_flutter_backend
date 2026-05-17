@@ -2260,64 +2260,6 @@ def smoke_20_task_complete_basic() -> None:
     print("smoke 20 OK (complete tarea mock + need_context / selección)")
 
 
-def smoke_21_task_patch_http() -> None:
-    """v0.47.31: PATCH /tasks/{id} y alias /tasks/{id}/complete sobre store aislado."""
-    from fastapi.testclient import TestClient
-
-    import backend.main as main_mod
-
-    with tempfile.TemporaryDirectory() as d:
-        base = Path(d)
-        store = TasksStore(path=base / "tasks.json")
-        row = store.add_task({"title": "comprar leche", "date_text": "mañana"})
-        tid = str(row["id"])
-
-        previous = main_mod.tasks_store
-        main_mod.tasks_store = store
-        try:
-            client = TestClient(main_mod.app)
-
-            r_true = client.patch(f"/tasks/{tid}", json={"completed": True})
-            if r_true.status_code != 200:
-                raise AssertionError(
-                    f"smoke21 PATCH completed true: {r_true.status_code} {r_true.text}"
-                )
-            body_true = r_true.json()
-            if str(body_true.get("id")) != tid:
-                raise AssertionError(f"smoke21 id: {body_true!r}")
-            if body_true.get("completed") is not True:
-                raise AssertionError(f"smoke21 completed true: {body_true!r}")
-            if len(store.list_tasks()) != 1:
-                raise AssertionError("smoke21 no debe crear filas extra")
-
-            r_false = client.patch(f"/tasks/{tid}", json={"completed": False})
-            if r_false.status_code != 200:
-                raise AssertionError(
-                    f"smoke21 PATCH completed false: {r_false.status_code} {r_false.text}"
-                )
-            if r_false.json().get("completed") is not False:
-                raise AssertionError(r_false.json())
-
-            r_alias = client.patch(f"/tasks/{tid}/complete", json={})
-            if r_alias.status_code != 200:
-                raise AssertionError(
-                    f"smoke21 PATCH /complete: {r_alias.status_code} {r_alias.text}"
-                )
-            if r_alias.json().get("completed") is not True:
-                raise AssertionError(r_alias.json())
-
-            ghost = "00000000-0000-4000-8000-000000000099"
-            r404 = client.patch(f"/tasks/{ghost}", json={"completed": True})
-            if r404.status_code != 404:
-                raise AssertionError(
-                    f"smoke21 esperaba 404, status={r404.status_code} body={r404.text}"
-                )
-        finally:
-            main_mod.tasks_store = previous
-
-    print("smoke 21 OK (HTTP PATCH tareas)")
-
-
 def main() -> int:
     try:
         smoke_1_2_ambiguous_then_continue()
@@ -2337,7 +2279,6 @@ def main() -> int:
         smoke_18_clean_event_card_contract()
         smoke_19_continue_guard_no_note_task()
         smoke_20_task_complete_basic()
-        smoke_21_task_patch_http()
     except AssertionError as e:
         print(f"FAIL: {e}", file=sys.stderr)
         return 1
