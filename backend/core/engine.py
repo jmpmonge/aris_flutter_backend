@@ -672,13 +672,25 @@ class ArisMinimalEngine:
         """Campos admitidos por events_store.update_event; omitir vacíos."""
         out: dict[str, Any] = {}
 
-        if "title" in obj:
-            tv = obj.get("title")
-            if tv is not None and str(tv).strip():
-                out["title"] = str(tv).strip()
+        iso_keys_evt = ("cal_date_iso", "date_iso", "dateISO")
+
+        if "cal_title" in obj or "title" in obj:
+            raw_t = (
+                obj.get("cal_title")
+                if "cal_title" in obj
+                else obj.get("title")
+            )
+            if raw_t is None or (
+                isinstance(raw_t, str) and raw_t.strip() == ""
+            ):
+                raw_t = obj.get("title") if "cal_title" in obj else None
+            if raw_t is not None and str(raw_t).strip():
+                out["title"] = str(raw_t).strip()
 
         dt_val = None
-        if "date_text" in obj:
+        if "cal_date_text" in obj:
+            dt_val = obj.get("cal_date_text")
+        elif "date_text" in obj:
             dt_val = obj.get("date_text")
         elif "date" in obj:
             dt_val = obj.get("date")
@@ -686,15 +698,23 @@ class ArisMinimalEngine:
             out["date_text"] = str(dt_val).strip()
 
         tm_val = None
-        if "time_text" in obj:
+        if "cal_time_text" in obj:
+            tm_val = obj.get("cal_time_text")
+        elif "time_text" in obj:
             tm_val = obj.get("time_text")
         elif "time" in obj:
             tm_val = obj.get("time")
         if tm_val is not None and str(tm_val).strip():
             out["time_text"] = str(tm_val).strip()
 
-        if "people" in obj or "participants" in obj:
-            pr = obj.get("people")
+        if (
+            "cal_people" in obj
+            or "people" in obj
+            or "participants" in obj
+        ):
+            pr = obj.get("cal_people")
+            if pr is None and "people" in obj:
+                pr = obj.get("people")
             if pr is None and "participants" in obj:
                 pr = obj.get("participants")
             parts: list[str] = []
@@ -707,36 +727,48 @@ class ArisMinimalEngine:
             if parts:
                 out["participants"] = parts
 
-        if "location" in obj:
+        if "cal_location" in obj:
+            loc = obj.get("cal_location")
+            if loc is not None and str(loc).strip():
+                out["location"] = str(loc).strip()
+        elif "location" in obj:
             loc = obj.get("location")
             if loc is not None and str(loc).strip():
                 out["location"] = str(loc).strip()
 
-        if "description" in obj:
+        if "cal_description" in obj:
+            desc = obj.get("cal_description")
+            if desc is not None and str(desc).strip():
+                out["description"] = str(desc).strip()
+        elif "description" in obj:
             desc = obj.get("description")
             if desc is not None and str(desc).strip():
                 out["description"] = str(desc).strip()
 
-        if "duration_minutes" in obj:
+        if "cal_duration_minutes" in obj:
+            dm = obj.get("cal_duration_minutes")
+            if isinstance(dm, int):
+                out["duration_minutes"] = dm
+        elif "duration_minutes" in obj:
             dm = obj.get("duration_minutes")
             if isinstance(dm, int):
                 out["duration_minutes"] = dm
 
-        if "date_iso" in obj or "dateISO" in obj:
-            cand = ArisMinimalEngine._coerce_date_iso_from_obj(obj)
+        if any(k in obj for k in iso_keys_evt):
+            cand = ArisMinimalEngine._coerce_date_iso_from_keys(obj, iso_keys_evt)
             if cand is not None:
                 out["date_iso"] = cand
             else:
+
                 def _blank_di(v: Any) -> bool:
                     return v is None or (
                         isinstance(v, str) and str(v).strip() == ""
                     )
 
                 had_nonempty = False
-                if "date_iso" in obj and not _blank_di(obj.get("date_iso")):
-                    had_nonempty = True
-                if "dateISO" in obj and not _blank_di(obj.get("dateISO")):
-                    had_nonempty = True
+                for ik in iso_keys_evt:
+                    if ik in obj and not _blank_di(obj.get(ik)):
+                        had_nonempty = True
                 if not had_nonempty:
                     out["date_iso"] = None
 
@@ -760,10 +792,11 @@ class ArisMinimalEngine:
         return s
 
     @staticmethod
-    def _coerce_date_iso_from_obj(obj: dict[str, Any]) -> str | None:
+    def _coerce_date_iso_from_keys(obj: dict[str, Any], keys: tuple[str, ...]) -> str | None:
+        """Primer valor ISO válido hallado en ``obj`` según orden de prioridad ``keys``."""
         if not isinstance(obj, dict):
             return None
-        for key in ("date_iso", "dateISO"):
+        for key in keys:
             if key not in obj:
                 continue
             got = ArisMinimalEngine._coerce_date_iso_raw(obj.get(key))
@@ -775,37 +808,56 @@ class ArisMinimalEngine:
     def _event_payload(obj: dict[str, Any]) -> dict[str, Any] | None:
         if not isinstance(obj, dict):
             return None
-        title = str(obj.get("title") or "").strip()
+        raw_title = obj.get("cal_title")
+        if raw_title is None or str(raw_title).strip() == "":
+            raw_title = obj.get("title")
+        title = str(raw_title or "").strip()
         if not title:
             return None
 
-        parts_raw = obj.get("people")
+        parts_raw = obj.get("cal_people")
+        if parts_raw is None:
+            parts_raw = obj.get("people")
         if parts_raw is None:
             parts_raw = obj.get("participants")
         participants: list[str] = []
         if isinstance(parts_raw, list):
             participants = [str(p).strip() for p in parts_raw if str(p).strip()]
 
-        dm_raw = obj.get("duration_minutes")
+        dm_raw = obj.get("cal_duration_minutes")
+        if dm_raw is None:
+            dm_raw = obj.get("duration_minutes")
         duration_minutes: int | None = dm_raw if isinstance(dm_raw, int) else None
 
-        date_text = obj.get("date_text")
+        date_text = obj.get("cal_date_text")
+        if date_text is None or str(date_text).strip() == "":
+            date_text = obj.get("date_text")
         if date_text is None or str(date_text).strip() == "":
             date_text = obj.get("date")
-        time_text = obj.get("time_text")
+
+        time_text = obj.get("cal_time_text")
+        if time_text is None or str(time_text).strip() == "":
+            time_text = obj.get("time_text")
         if time_text is None or str(time_text).strip() == "":
             time_text = obj.get("time")
 
-        loc = obj.get("location")
+        loc = obj.get("cal_location")
+        if loc is None:
+            loc = obj.get("location")
         location = (
             str(loc).strip() if loc is not None and str(loc).strip() else None
         )
-        desc = obj.get("description")
+
+        desc = obj.get("cal_description")
+        if desc is None:
+            desc = obj.get("description")
         description = (
             str(desc).strip() if desc is not None and str(desc).strip() else None
         )
 
-        date_iso_store = ArisMinimalEngine._coerce_date_iso_from_obj(obj)
+        date_iso_store = ArisMinimalEngine._coerce_date_iso_from_keys(
+            obj, ("cal_date_iso", "date_iso", "dateISO")
+        )
 
         out: dict[str, Any] = {
             "title": title,
@@ -828,61 +880,109 @@ class ArisMinimalEngine:
         if not isinstance(obj, dict):
             return {}
         out: dict[str, Any] = {}
+        iso_keys_task = ("task_due_date_iso", "date_iso", "dateISO")
 
-        if "title" in obj:
-            t = str(obj.get("title") or "").strip()
+        if "task_title" in obj or "title" in obj:
+            raw_t = (
+                obj.get("task_title")
+                if "task_title" in obj
+                else obj.get("title")
+            )
+            if raw_t is None or (
+                isinstance(raw_t, str) and raw_t.strip() == ""
+            ):
+                raw_t = obj.get("title") if "task_title" in obj else None
+            t = str(raw_t or "").strip()
             if t:
                 out["title"] = t
 
-        if "description" in obj:
-            dv = obj.get("description")
+        if "task_description" in obj or "description" in obj:
+            if "task_description" in obj:
+                dv = obj.get("task_description")
+            else:
+                dv = obj.get("description")
             if dv is None:
                 out["description"] = None
             else:
                 s = str(dv).strip()
                 out["description"] = s if s else None
 
-        if "date_text" in obj or "date" in obj:
-            dt_val = (
-                obj.get("date_text") if "date_text" in obj else obj.get("date")
-            )
+        if (
+            "task_due_date_text" in obj
+            or "date_text" in obj
+            or "date" in obj
+        ):
+            if "task_due_date_text" in obj:
+                dt_val = obj.get("task_due_date_text")
+            elif "date_text" in obj:
+                dt_val = obj.get("date_text")
+            else:
+                dt_val = obj.get("date")
             if dt_val is None:
                 out["date_text"] = None
             else:
                 ds = str(dt_val).strip()
                 out["date_text"] = ds if ds else None
 
-        if "date_iso" in obj or "dateISO" in obj:
-            raw = obj.get("date_iso") if "date_iso" in obj else obj.get("dateISO")
-            if raw is None or (
-                isinstance(raw, str) and str(raw).strip() == ""
-            ):
-                out["date_iso"] = None
+        if any(k in obj for k in iso_keys_task):
+            cand = ArisMinimalEngine._coerce_date_iso_from_keys(
+                obj, iso_keys_task
+            )
+            if cand is not None:
+                out["date_iso"] = cand
             else:
-                norm = ArisMinimalEngine._coerce_date_iso_raw(raw)
-                if norm is not None:
-                    out["date_iso"] = norm
 
-        if "time_text" in obj or "time" in obj:
-            tm = obj.get("time_text") if "time_text" in obj else obj.get("time")
+                def _blank_di_task(v: Any) -> bool:
+                    return v is None or (
+                        isinstance(v, str) and str(v).strip() == ""
+                    )
+
+                had_nonempty_task = False
+                for ik in iso_keys_task:
+                    if ik in obj and not _blank_di_task(obj.get(ik)):
+                        had_nonempty_task = True
+                if not had_nonempty_task:
+                    out["date_iso"] = None
+
+        if (
+            "task_due_time_text" in obj
+            or "time_text" in obj
+            or "time" in obj
+        ):
+            if "task_due_time_text" in obj:
+                tm = obj.get("task_due_time_text")
+            elif "time_text" in obj:
+                tm = obj.get("time_text")
+            else:
+                tm = obj.get("time")
             if tm is None:
                 out["time_text"] = None
             else:
                 ts = str(tm).strip()
                 out["time_text"] = ts if ts else None
 
-        if "priority" in obj:
-            pr = obj.get("priority")
+        if "task_priority" in obj or "priority" in obj:
+            pr = (
+                obj.get("task_priority")
+                if "task_priority" in obj
+                else obj.get("priority")
+            )
             if pr is None or str(pr).strip() == "":
                 out["priority"] = "normal"
             else:
                 ps = str(pr).strip().lower()
                 out["priority"] = "high" if ps == "high" else "normal"
 
-        if "tags" in obj:
-            traw = obj.get("tags")
+        if "task_tags" in obj or "tags" in obj:
+            traw = (
+                obj.get("task_tags")
+                if "task_tags" in obj
+                else obj.get("tags")
+            )
             if isinstance(traw, list):
-                out["tags"] = [str(x).strip() for x in traw if str(x).strip()]
+                out["tags"] = [
+                    str(x).strip() for x in traw if str(x).strip()
+                ]
             else:
                 out["tags"] = []
 
@@ -892,34 +992,58 @@ class ArisMinimalEngine:
     def _task_payload(obj: dict[str, Any]) -> dict[str, Any] | None:
         if not isinstance(obj, dict):
             return None
-        title = str(obj.get("title") or "").strip()
+        raw_title = obj.get("task_title")
+        if raw_title is None or str(raw_title).strip() == "":
+            raw_title = obj.get("title")
+        title = str(raw_title or "").strip()
         if not title:
             return None
 
-        date_text = obj.get("date_text") or obj.get("date")
-        time_text = obj.get("time_text") or obj.get("time")
+        date_text = obj.get("task_due_date_text")
+        if date_text is None or str(date_text).strip() == "":
+            date_text = obj.get("date_text")
+        if date_text is None or str(date_text).strip() == "":
+            date_text = obj.get("date")
+
+        time_text = obj.get("task_due_time_text")
+        if time_text is None or str(time_text).strip() == "":
+            time_text = obj.get("time_text")
+        if time_text is None or str(time_text).strip() == "":
+            time_text = obj.get("time")
 
         description: str | None = None
-        if obj.get("description") is not None:
-            ds = str(obj.get("description")).strip()
+        if "task_description" in obj:
+            dsc = obj.get("task_description")
+        elif "description" in obj:
+            dsc = obj.get("description")
+        else:
+            dsc = None
+        if dsc is not None:
+            ds = str(dsc).strip()
             if ds:
                 description = ds
 
-        date_iso_store: str | None = None
-        if "date_iso" in obj or "dateISO" in obj:
-            date_iso_store = ArisMinimalEngine._coerce_date_iso_from_obj(obj)
+        date_iso_store = ArisMinimalEngine._coerce_date_iso_from_keys(
+            obj, ("task_due_date_iso", "date_iso", "dateISO")
+        )
 
-        priority_raw = obj.get("priority")
-        if priority_raw is None or str(priority_raw).strip() == "":
+        pr_src = obj.get("task_priority")
+        if pr_src is None:
+            pr_src = obj.get("priority")
+        if pr_src is None or str(pr_src).strip() == "":
             priority_eff = "normal"
         else:
-            ps = str(priority_raw).strip().lower()
+            ps = str(pr_src).strip().lower()
             priority_eff = "high" if ps == "high" else "normal"
 
         tags_for_store: list[str] = []
-        traw = obj.get("tags")
+        traw = obj.get("task_tags")
+        if traw is None:
+            traw = obj.get("tags")
         if isinstance(traw, list):
-            tags_for_store = [str(x).strip() for x in traw if str(x).strip()]
+            tags_for_store = [
+                str(x).strip() for x in traw if str(x).strip()
+            ]
 
         out: dict[str, Any] = {
             "title": title,
@@ -939,10 +1063,16 @@ class ArisMinimalEngine:
     def _note_payload(obj: dict[str, Any]) -> dict[str, Any] | None:
         if not isinstance(obj, dict):
             return None
-        title_raw = obj.get("title")
+        if "note_title" in obj:
+            title_raw = obj.get("note_title")
+        else:
+            title_raw = obj.get("title")
         title = str(title_raw).strip() if title_raw is not None else ""
 
-        content_raw = obj.get("content")
+        if "note_content" in obj:
+            content_raw = obj.get("note_content")
+        else:
+            content_raw = obj.get("content")
         content = str(content_raw).strip() if content_raw is not None else ""
 
         if not content and title:
@@ -950,7 +1080,11 @@ class ArisMinimalEngine:
         if not content:
             return None
 
-        tags_raw = obj.get("tags")
+        tags_raw = (
+            obj.get("note_tags")
+            if "note_tags" in obj
+            else obj.get("tags")
+        )
         tags: list[str] = []
         if isinstance(tags_raw, list):
             tags = [str(t).strip() for t in tags_raw if str(t).strip()]

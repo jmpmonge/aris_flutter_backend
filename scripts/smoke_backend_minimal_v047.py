@@ -3349,6 +3349,217 @@ def smoke_25_disable_hidden_recent_recovery() -> None:
     print("smoke 25 OK (recent oculto desactivado v0.47.36.2)")
 
 
+def smoke_26_prefixed_domain_contract() -> None:
+    """v0.47.36.3 — contrato ``cal_*`` / ``task_*`` / ``note_*`` con alias legacy."""
+    # --- A: event/create con cal_* ---
+    r_ev: dict[str, Any] = {
+        "s": "ready",
+        "i": "event",
+        "a": "create",
+        "obj": {
+            "cal_title": "cita con el médico",
+            "cal_date_text": "lunes",
+            "cal_date_iso": "2026-05-18",
+            "cal_time_text": "10:00",
+            "cal_people": [],
+            "cal_location": None,
+            "cal_description": None,
+            "cal_duration_minutes": None,
+        },
+        "target": None,
+        "q": None,
+        "r": "He guardado la cita.",
+        "pending": None,
+        "ctx": None,
+    }
+    with tempfile.TemporaryDirectory() as td_a:
+        base = Path(td_a)
+        engine = _make_engine(base)
+        with patch.object(engine_mod, "ask_gpt", return_value=r_ev):
+            _, _, ev_row, _ = engine.process_message("cita médico")
+        evs = engine._events.list_events()
+        if len(evs) != 1:
+            raise AssertionError(f"smoke26A events {evs!r}")
+        er = evs[0]
+        if str(er.get("title")) != "cita con el médico":
+            raise AssertionError(f"smoke26A title {er!r}")
+        if str(er.get("date_text") or "") != "lunes":
+            raise AssertionError(f"smoke26A date_text {er!r}")
+        if str(er.get("date_iso") or "") != "2026-05-18":
+            raise AssertionError(f"smoke26A date_iso {er!r}")
+        if str(er.get("time_text") or "") != "10:00":
+            raise AssertionError(f"smoke26A time_text {er!r}")
+
+    # --- B: task/create con task_*; no crea evento ---
+    r_task_new: dict[str, Any] = {
+        "s": "ready",
+        "i": "task",
+        "a": "create",
+        "obj": {
+            "task_title": "ir al banco",
+            "task_description": None,
+            "task_due_date_text": "lunes",
+            "task_due_date_iso": "2026-05-18",
+            "task_due_time_text": "10:00",
+            "task_priority": "normal",
+            "task_tags": ["Banco"],
+        },
+        "target": None,
+        "q": None,
+        "r": "He creado la tarea.",
+        "pending": None,
+        "ctx": None,
+    }
+    with tempfile.TemporaryDirectory() as td_b:
+        base = Path(td_b)
+        engine = _make_engine(base)
+        with patch.object(engine_mod, "ask_gpt", return_value=r_task_new):
+            _, _, trow, _ = engine.process_message("tarea banco")
+        if engine._events.list_events():
+            raise AssertionError("smoke26B evento no esperado")
+        if trow is None or str(trow.get("title")) != "ir al banco":
+            raise AssertionError(f"smoke26B task {trow!r}")
+        if str(trow.get("date_text") or "").lower() != "lunes":
+            raise AssertionError(f"smoke26B date_text {trow!r}")
+        if str(trow.get("date_iso") or "") != "2026-05-18":
+            raise AssertionError(f"smoke26B date_iso {trow!r}")
+        if str(trow.get("time_text") or "") != "10:00":
+            raise AssertionError(f"smoke26B time_text {trow!r}")
+        if str(trow.get("priority")) != "normal":
+            raise AssertionError(f"smoke26B priority {trow!r}")
+        if list(trow.get("tags") or []) != ["Banco"]:
+            raise AssertionError(f"smoke26B tags {trow!r}")
+
+    # --- C: task/update con task_due_time_text ---
+    r_tu: dict[str, Any] = {
+        "s": "ready",
+        "i": "task",
+        "a": "update",
+        "obj": {"task_due_time_text": "11:00"},
+        "target": "",
+        "q": None,
+        "r": "He actualizado la tarea.",
+        "pending": None,
+        "ctx": None,
+    }
+    with tempfile.TemporaryDirectory() as td_c:
+        base = Path(td_c)
+        engine = _make_engine(base)
+        tt = engine._tasks.add_task({"title": "ir al banco"})
+        tid = str(tt["id"])
+        r_c = dict(r_tu)
+        r_c["target"] = tid
+        with patch.object(engine_mod, "ask_gpt", return_value=r_c):
+            _, _, updated, _ = engine.process_message("a las once")
+        if updated is None or str(updated.get("time_text") or "") != "11:00":
+            raise AssertionError(f"smoke26C time {updated!r}")
+        if engine._events.list_events():
+            raise AssertionError("smoke26C no evento")
+        if engine._thread_store.get_state().get("open"):
+            raise AssertionError("smoke26C hilo cerrado")
+
+    # --- D: event/update con cal_time_text ---
+    r_eu: dict[str, Any] = {
+        "s": "ready",
+        "i": "event",
+        "a": "update",
+        "obj": {"cal_time_text": "12:00"},
+        "target": "",
+        "q": None,
+        "r": "He actualizado el evento.",
+        "pending": None,
+        "ctx": None,
+    }
+    with tempfile.TemporaryDirectory() as td_d:
+        base = Path(td_d)
+        engine = _make_engine(base)
+        ev0 = engine._events.add_event(
+            {
+                "title": "reunión",
+                "date_text": "hoy",
+                "time_text": "09:00",
+                "date_iso": None,
+                "participants": [],
+                "location": None,
+                "description": None,
+                "duration_minutes": None,
+            }
+        )
+        eid = str(ev0["id"])
+        r_d = dict(r_eu)
+        r_d["target"] = eid
+        with patch.object(engine_mod, "ask_gpt", return_value=r_d):
+            _, _, ev_u, _ = engine.process_message("mediodía")
+        if ev_u is None or str(ev_u.get("time_text") or "") != "12:00":
+            raise AssertionError(f"smoke26D event {ev_u!r}")
+        if len(engine._tasks.list_tasks()) != 0:
+            raise AssertionError("smoke26D sin tareas")
+        if engine._thread_store.get_state().get("open"):
+            raise AssertionError("smoke26D cerrado")
+
+    # --- E: note/create con note_* ---
+    r_note: dict[str, Any] = {
+        "s": "ready",
+        "i": "note",
+        "a": "create",
+        "obj": {
+            "note_title": "Idea Aris",
+            "note_content": "Separar los campos por dominio.",
+            "note_tags": ["Aris"],
+        },
+        "target": None,
+        "q": None,
+        "r": "He guardado la nota.",
+        "pending": None,
+        "ctx": None,
+    }
+    with tempfile.TemporaryDirectory() as td_e:
+        base = Path(td_e)
+        engine = _make_engine(base)
+        with patch.object(engine_mod, "ask_gpt", return_value=r_note):
+            _, _, nrow, _ = engine.process_message("nota idea")
+        if nrow is None:
+            raise AssertionError("smoke26E nota")
+        if str(nrow.get("title") or "") != "Idea Aris":
+            raise AssertionError(f"smoke26E title {nrow!r}")
+        if str(nrow.get("content") or "") != "Separar los campos por dominio.":
+            raise AssertionError(f"smoke26E content {nrow!r}")
+        if list(nrow.get("tags") or []) != ["Aris"]:
+            raise AssertionError(f"smoke26E tags {nrow!r}")
+
+    # --- F: alias legacy task/create ---
+    r_legacy: dict[str, Any] = {
+        "s": "ready",
+        "i": "task",
+        "a": "create",
+        "obj": {
+            "title": "comprar pan",
+            "date": "mañana",
+            "time": "08:30",
+            "priority": "normal",
+            "tags": [],
+        },
+        "target": None,
+        "q": None,
+        "r": "Ok.",
+        "pending": None,
+        "ctx": None,
+    }
+    with tempfile.TemporaryDirectory() as td_f:
+        base = Path(td_f)
+        engine = _make_engine(base)
+        with patch.object(engine_mod, "ask_gpt", return_value=r_legacy):
+            _, _, leg, _ = engine.process_message("pan")
+        if leg is None or str(leg.get("title")) != "comprar pan":
+            raise AssertionError(f"smoke26F {leg!r}")
+        if str(leg.get("date_text") or "").lower() != "mañana":
+            raise AssertionError(f"smoke26F date_text {leg!r}")
+        if str(leg.get("time_text") or "") != "08:30":
+            raise AssertionError(f"smoke26F time {leg!r}")
+
+    print("smoke 26 OK (contrato prefijado v0.47.36.3)")
+
+
 def main() -> int:
     try:
         smoke_1_2_ambiguous_then_continue()
@@ -3373,6 +3584,7 @@ def main() -> int:
         smoke_23_task_update_basic()
         smoke_24_recoverable_task_update_state()
         smoke_25_disable_hidden_recent_recovery()
+        smoke_26_prefixed_domain_contract()
     except AssertionError as e:
         print(f"FAIL: {e}", file=sys.stderr)
         return 1
