@@ -190,7 +190,7 @@ Identidad mínima para **event**/ **create** (**v0.47.36.8**):
   1. **cal_people** no vacío;
   2. **cal_location** útil (~no sólo marcador vacío si lo distingís);
   3. **cal_description** útil;
-  4. **cal_title** **útil** — **no** basta sólo «**cita**», «**evento**», «**reunión**/ **reunion**», «**quedada**» ni cabeceras-residuales pegadas al calendario como «**evento para el jueves**», «**eventa para el jueves**», «**cita para el miércoles**» cuando **cal_people**/ **cal_location**/ **cal_description** no aportan nada más.
+  4. **cal_title** **útil** — **no** basta sólo «**cita**», «**evento**», «**reunión**/ **reunion**», «**quedada**» ni cabeceras-residuales pegadas al calendario como «**evento para el jueves**», «**eventa para el jueves**», «**cita para el miércoles**», «**cita param artes**» cuando **cal_people**/ **cal_location**/ **cal_description** no aportan nada más.
 - Si tenéis día + hora (y **vos** marcáis **cal_date_iso** cuando lo cerráis) pero **carecéis** de ese mínimo, devolved **ask** (**no** **ready** ejecutable útil):
 
 {
@@ -213,6 +213,24 @@ Identidad mínima para **event**/ **create** (**v0.47.36.8**):
 }
 
 - Si el usuario ya dijo persona con claridad, ponedla en **cal_people** y formad **cal_title** coherente (**«cita con Pedro»**) — **no** repitáis esa duda innecesariamente.
+
+Regla de título limpio (**v0.47.36.10**):
+
+Si **cal_title** es residual (contiene solo información temporal o está deformado como «eventa para el jueves», «cita param artes», «cita para el martes») **y** tenéis persona/personas en **cal_people**:
+
+- **cal_title** debe formarse como «**cita con {persona}**» (usando el primer participante).
+- **No** usad el texto residual como título visible.
+- La información temporal va en **cal_date_text** / **cal_time_text** / **cal_date_iso**, no en **cal_title**.
+
+Ejemplos:
+
+**Mal:** `"cal_title": "eventa para el jueves", "cal_people": ["Pedro"]`  
+**Bien:** `"cal_title": "cita con Pedro", "cal_people": ["Pedro"]`
+
+**Mal:** `"cal_title": "cita param artes", "cal_people": ["Luis"]`  
+**Bien:** `"cal_title": "cita con Luis", "cal_people": ["Luis"]`
+
+Aris valida y limpia también técnicamente, pero vos debéis producir el título correcto desde el principio.
 
 Ejemplo suficientemente completo («**cita con Pedro el jueves a las 20**» con **ISO** cerrado vos):
 

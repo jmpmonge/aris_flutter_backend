@@ -4960,6 +4960,196 @@ def smoke_32_event_update_missing_target_can_offer_create_instead() -> None:
     print("smoke 32 OK (event/update target inexistente → ofrece crear v0.47.36.9)")
 
 
+def smoke_33_event_minimal_identity_and_title_cleanup() -> None:
+    """v0.47.36.10 — identidad mínima de evento y limpieza de título residual."""
+
+    # ── CASO A ── fecha/hora/ISO sin identidad → no persiste, pregunta ───────────────
+    r_a: dict[str, Any] = {
+        "s": "ready",
+        "i": "event",
+        "a": "create",
+        "obj": {
+            "cal_title": "cita",
+            "cal_date_text": "jueves",
+            "cal_date_iso": "2026-05-21",
+            "cal_time_text": "20:00",
+            "cal_people": [],
+        },
+        "target": None,
+        "q": None,
+        "r": "He guardado la cita.",
+        "pending": None,
+        "ctx": None,
+    }
+
+    with tempfile.TemporaryDirectory() as d_a:
+        base = Path(d_a)
+        eng_a = _make_engine(base)
+
+        with patch.object(engine_mod, "ask_gpt", return_value=r_a):
+            va, _, ea, _ = eng_a.process_message("cita el jueves a las 20")
+
+        if ea is not None:
+            raise AssertionError(f"smoke33A no debe crear {ea!r}")
+        if eng_a._events.list_events():
+            raise AssertionError("smoke33A sin eventos en store")
+        va_lc = (va or "").lower()
+        if "con quién" not in va_lc and "sobre qué" not in va_lc:
+            raise AssertionError(f"smoke33A debe preguntar identidad {va!r}")
+        st_a = eng_a._thread_store.get_state()
+        if not st_a.get("open"):
+            raise AssertionError(f"smoke33A hilo abierto {st_a!r}")
+        if (st_a.get("pending") or {}).get("field") != "cal_identity":
+            raise AssertionError(f"smoke33A pending.field cal_identity {st_a!r}")
+
+    # ── CASO B ── continuación "con Pedro" crea evento ─────────────────────────────
+    r_b_block: dict[str, Any] = dict(r_a)
+    r_b_fill: dict[str, Any] = {
+        "s": "ready",
+        "i": "event",
+        "a": "create",
+        "obj": {
+            "cal_title": "cita con Pedro",
+            "cal_date_text": "jueves",
+            "cal_date_iso": "2026-05-21",
+            "cal_time_text": "20:00",
+            "cal_people": ["Pedro"],
+        },
+        "target": None,
+        "q": None,
+        "r": "He guardado la cita con Pedro.",
+        "pending": None,
+        "ctx": None,
+    }
+
+    with tempfile.TemporaryDirectory() as d_b:
+        base = Path(d_b)
+        eng_b = _make_engine(base)
+        seq_b = iter([r_b_block, r_b_fill])
+
+        def fseq_b(_p: dict[str, Any]) -> dict[str, Any] | None:
+            return next(seq_b)
+
+        with patch.object(engine_mod, "ask_gpt", side_effect=fseq_b):
+            eng_b.process_message("cita el jueves a las 20")
+            vb, _, sb, _ = eng_b.process_message("con Pedro")
+
+        if sb is None:
+            raise AssertionError("smoke33B debe crear evento")
+        if str(sb.get("title")) != "cita con Pedro":
+            raise AssertionError(f"smoke33B title {sb!r}")
+        if sb.get("participants") != ["Pedro"]:
+            raise AssertionError(f"smoke33B participants {sb!r}")
+        if str(sb.get("date_iso")) != "2026-05-21":
+            raise AssertionError(f"smoke33B date_iso {sb!r}")
+        if eng_b._thread_store.get_state().get("open"):
+            raise AssertionError("smoke33B hilo cerrado")
+
+    # ── CASO C ── título residual "eventa para el jueves" con people se normaliza ───
+    r_c: dict[str, Any] = {
+        "s": "ready",
+        "i": "event",
+        "a": "create",
+        "obj": {
+            "cal_title": "eventa para el jueves",
+            "cal_date_text": "jueves",
+            "cal_date_iso": "2026-05-21",
+            "cal_time_text": "20:00",
+            "cal_people": ["Pedro"],
+        },
+        "target": None,
+        "q": None,
+        "r": "He guardado la cita.",
+        "pending": None,
+        "ctx": None,
+    }
+
+    with tempfile.TemporaryDirectory() as d_c:
+        base = Path(d_c)
+        eng_c = _make_engine(base)
+
+        with patch.object(engine_mod, "ask_gpt", return_value=r_c):
+            vc, _, sc, _ = eng_c.process_message("cita con Pedro el jueves a las 20")
+
+        if sc is None:
+            raise AssertionError("smoke33C debe crear evento")
+        if str(sc.get("title")) != "cita con Pedro":
+            raise AssertionError(f"smoke33C title normalizado {sc!r}")
+        if sc.get("participants") != ["Pedro"]:
+            raise AssertionError(f"smoke33C participants {sc!r}")
+        evs_c = eng_c._events.list_events()
+        if len(evs_c) != 1:
+            raise AssertionError(f"smoke33C un evento {evs_c!r}")
+
+    # ── CASO D ── "cita param artes" con people se normaliza ─────────────────────────
+    r_d: dict[str, Any] = {
+        "s": "ready",
+        "i": "event",
+        "a": "create",
+        "obj": {
+            "cal_title": "cita param artes",
+            "cal_date_text": "martes",
+            "cal_date_iso": "2026-05-19",
+            "cal_time_text": "20:00",
+            "cal_people": ["Luis"],
+        },
+        "target": None,
+        "q": None,
+        "r": "He guardado la cita.",
+        "pending": None,
+        "ctx": None,
+    }
+
+    with tempfile.TemporaryDirectory() as d_d:
+        base = Path(d_d)
+        eng_d = _make_engine(base)
+
+        with patch.object(engine_mod, "ask_gpt", return_value=r_d):
+            vd, _, sd, _ = eng_d.process_message("cita param artes con luis")
+
+        if sd is None:
+            raise AssertionError("smoke33D debe crear evento")
+        if str(sd.get("title")) != "cita con Luis":
+            raise AssertionError(f"smoke33D title normalizado a cita con Luis {sd!r}")
+        if sd.get("participants") != ["Luis"]:
+            raise AssertionError(f"smoke33D participants {sd!r}")
+
+    # ── CASO E ── título útil con people se conserva intacto ──────────────────────────
+    r_e: dict[str, Any] = {
+        "s": "ready",
+        "i": "event",
+        "a": "create",
+        "obj": {
+            "cal_title": "revisión del contrato",
+            "cal_date_text": "martes",
+            "cal_date_iso": "2026-05-19",
+            "cal_time_text": "20:00",
+            "cal_people": ["Luis"],
+        },
+        "target": None,
+        "q": None,
+        "r": "He guardado el evento.",
+        "pending": None,
+        "ctx": None,
+    }
+
+    with tempfile.TemporaryDirectory() as d_e:
+        base = Path(d_e)
+        eng_e = _make_engine(base)
+
+        with patch.object(engine_mod, "ask_gpt", return_value=r_e):
+            ve, _, se, _ = eng_e.process_message("revisión del contrato martes 20h con Luis")
+
+        if se is None:
+            raise AssertionError("smoke33E debe crear evento")
+        if str(se.get("title")) != "revisión del contrato":
+            raise AssertionError(f"smoke33E title útil se conserva {se!r}")
+        if se.get("participants") != ["Luis"]:
+            raise AssertionError(f"smoke33E participants {se!r}")
+
+    print("smoke 33 OK (identidad mínima y título limpio v0.47.36.10)")
+
+
 def main() -> int:
     try:
         smoke_1_2_ambiguous_then_continue()
@@ -4991,6 +5181,7 @@ def main() -> int:
         smoke_30_last_focus_does_not_dominate_new_event_card()
         smoke_31_event_create_requires_minimal_identity()
         smoke_32_event_update_missing_target_can_offer_create_instead()
+        smoke_33_event_minimal_identity_and_title_cleanup()
     except AssertionError as e:
         print(f"FAIL: {e}", file=sys.stderr)
         return 1

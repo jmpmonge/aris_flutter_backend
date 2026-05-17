@@ -55,6 +55,7 @@ _GENERIC_EVENT_TITLE_PREFIXES: tuple[str, ...] = (
     "evento para ",
     "eventa para ",
     "cita para ",
+    "cita param ",   # "cita param artes" → corrupted "cita para m[artes/…]"
     "reunion para ",
 )
 
@@ -286,6 +287,30 @@ class ArisMinimalEngine:
         if ttl is not None and str(ttl).strip():
             return not ArisMinimalEngine._is_generic_event_title(ttl)
         return False
+
+    @staticmethod
+    def _normalize_event_title_from_people_if_needed(
+        ev_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Si el título es residual/genérico y hay participantes, normaliza a «cita con <persona>».
+
+        No toca el título si ya es útil. Solo opera sobre el ev_payload normalizado
+        (claves sin prefijo: ``title``, ``participants``).
+        """
+        if not isinstance(ev_payload, dict):
+            return ev_payload
+        title = ev_payload.get("title")
+        if not ArisMinimalEngine._is_generic_event_title(title):
+            return ev_payload
+        participants = ev_payload.get("participants")
+        if not (isinstance(participants, list) and participants):
+            return ev_payload
+        persona = str(participants[0]).strip()
+        if not persona:
+            return ev_payload
+        out = dict(ev_payload)
+        out["title"] = f"cita con {persona}"
+        return out
 
     @staticmethod
     def _build_missing_event_identity_ask(
@@ -1154,6 +1179,10 @@ class ArisMinimalEngine:
                 return self._suspend_event_create_missing_calendar_iso(
                     obj_d, ev_payload
                 )
+
+            ev_payload = ArisMinimalEngine._normalize_event_title_from_people_if_needed(
+                ev_payload
+            )
 
             if not self._event_create_has_minimal_identity(ev_payload):
                 return self._suspend_event_create_missing_identity(
