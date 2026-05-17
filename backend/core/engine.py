@@ -202,6 +202,108 @@ class ArisMinimalEngine:
         }
         self._thread_store.save_state({"last_action": la})
 
+    #: ``pending.field`` que **no permite** ascender ``ask/create``→``ready`` porque GPT
+    #: marca explícitamente un ciclo aclaratorio.
+    _CREATE_ASK_PROMOTE_PENDING_OK: frozenset[str | None] = frozenset(
+        {None, "confirmation", "confirm"}
+    )
+
+    #: ``pending.field`` donde **no** se permite ascender (**selección, contexto, borrado**).
+    _CREATE_ASK_BLOCK_PENDING: frozenset[str] = frozenset(
+        {"target_selection", "delete_confirmation", "context"}
+    )
+
+    @staticmethod
+    def _is_complete_event_create_obj(obj: dict[str, Any]) -> bool:
+        """Ficha técnica mínima para **event**/ **create** ejecutable civil + hora."""
+        if not isinstance(obj, dict):
+            return False
+        raw_title = obj.get("cal_title")
+        if raw_title is None or str(raw_title).strip() == "":
+            raw_title = obj.get("title")
+        title = str(raw_title or "").strip()
+        if not title:
+            return False
+        iso_val = ArisMinimalEngine._coerce_date_iso_from_keys(
+            obj,
+            ("cal_date_iso", "date_iso", "dateISO"),
+        )
+        if iso_val is None:
+            return False
+        tm_raw = obj.get("cal_time_text")
+        if tm_raw is None or str(tm_raw).strip() == "":
+            tm_raw = obj.get("time_text")
+        if tm_raw is None or str(tm_raw).strip() == "":
+            tm_raw = obj.get("time")
+        time_s = str(tm_raw).strip() if tm_raw is not None else ""
+        return bool(time_s)
+
+    @staticmethod
+    def _is_complete_task_create_obj(obj: dict[str, Any]) -> bool:
+        if not isinstance(obj, dict):
+            return False
+        raw_t = obj.get("task_title")
+        if raw_t is None or str(raw_t).strip() == "":
+            raw_t = obj.get("title")
+        return bool(str(raw_t or "").strip())
+
+    @staticmethod
+    def _is_complete_note_create_obj(obj: dict[str, Any]) -> bool:
+        """Alineado con ``_note_payload``: contenido o título reutilizable como contenido."""
+        return ArisMinimalEngine._note_payload(obj) is not None
+
+    def _normalize_complete_create_ask(self, result: dict[str, Any]) -> dict[str, Any]:
+        """``ask/create`` con ``obj`` técnicamente completo → ``ready/create`` (**sin raw**).
+        GPT ya fijó intención; Aris sólo corrige ciclo **create**."""
+        if (
+            result.get("s") != "ask"
+            or result.get("a") != "create"
+            or result.get("i") not in {"event", "task", "note"}
+        ):
+            return result
+
+        pend = result.get("pending")
+        if isinstance(pend, dict):
+            raw_pf = pend.get("field")
+            if isinstance(raw_pf, str):
+                pf_lc = raw_pf.strip().lower() or None
+            elif raw_pf is None:
+                pf_lc = None
+            else:
+                pf_lc = str(raw_pf).strip().lower() or None
+
+            if pf_lc is not None and pf_lc in self._CREATE_ASK_BLOCK_PENDING:
+                return result
+            promote_ok = getattr(
+                ArisMinimalEngine,
+                "_CREATE_ASK_PROMOTE_PENDING_OK",
+                frozenset({None}),
+            )
+            # Si GPT marca **pending** distinto de confirm/explicit-neutral, respeta **ask**.
+            if pf_lc is not None and pf_lc not in promote_ok:
+                return result
+
+        obj_raw = result.get("obj")
+        obj: dict[str, Any] = obj_raw if isinstance(obj_raw, dict) else {}
+        iv = result.get("i")
+
+        complete = False
+        if iv == "event":
+            complete = ArisMinimalEngine._is_complete_event_create_obj(obj)
+        elif iv == "task":
+            complete = ArisMinimalEngine._is_complete_task_create_obj(obj)
+        elif iv == "note":
+            complete = ArisMinimalEngine._is_complete_note_create_obj(obj)
+
+        if not complete:
+            return result
+
+        out = deepcopy(result)
+        out["s"] = "ready"
+        out["q"] = None
+        out["pending"] = None
+        return out
+
     def process_message(self, text: str) -> tuple[str, str, dict[str, Any] | None, str | None]:
         raw_in = (text or "").strip()
         if not raw_in:
@@ -216,6 +318,7 @@ class ArisMinimalEngine:
             return (_MSG_NO_GPT, "consulta", None, None)
 
         result = normalize_gpt_response(gpt_raw)
+        result = self._normalize_complete_create_ask(result)
         if result["s"] == "need_context":
             return self._flujo_need_context(peticion_raiz, result, depth=0)
         return self._aplicar_resultado_gpt(result, peticion_raiz)
@@ -278,6 +381,7 @@ class ArisMinimalEngine:
             return (_MSG_NEED_MORE_CTX, "ambiguo", None, None)
 
         segunda = normalize_gpt_response(segunda_raw)
+        segunda = self._normalize_complete_create_ask(segunda)
 
         if segunda["s"] == "need_context":
             return self._flujo_need_context(

@@ -4041,6 +4041,208 @@ def smoke_28_calendar_event_requires_iso_for_civil_integration() -> None:
     print("smoke 28 OK (cal_date_iso civiles v0.47.36.5)")
 
 
+def smoke_29_normalize_complete_create_ask() -> None:
+    """v0.47.36.6 — ``ask/create`` con ficha completa → ejecuta como ``ready``."""
+
+    ra: dict[str, Any] = {
+        "s": "ask",
+        "i": "event",
+        "a": "create",
+        "obj": {
+            "cal_title": "cita con Marco",
+            "cal_date_text": "miércoles",
+            "cal_date_iso": "2026-05-20",
+            "cal_time_text": "10:00",
+            "cal_people": ["Marco"],
+            "cal_location": None,
+            "cal_description": None,
+            "cal_duration_minutes": None,
+        },
+        "target": None,
+        "q": (
+            "¿Te refieres a la cita con Marco el miércoles "
+            "a las 10:00?"
+        ),
+        "r": "He guardado la cita con Marco para el miércoles a las 10:00.",
+        "pending": {"field": "confirmation"},
+        "ctx": None,
+    }
+
+    with tempfile.TemporaryDirectory() as d_a:
+        base = Path(d_a)
+        eng = _make_engine(base)
+        with patch.object(engine_mod, "ask_gpt", return_value=ra):
+            vis, intent, sav, _ = eng.process_message(
+                "cita con Marco el miércoles a las 10 de la mañana"
+            )
+
+        vis_lc = (vis or "").lower()
+        if (
+            ("refieres" in vis_lc or "¿te refieres" in vis_lc)
+            and "¿" in (vis or "")
+        ):
+            raise AssertionError(f"smoke29A no debía devolver esa pregunta: {vis!r}")
+
+        if sav is None or str(sav.get("title")) != "cita con Marco":
+            raise AssertionError(f"smoke29A evento {sav!r}")
+        if str(sav.get("date_text")) != "miércoles":
+            raise AssertionError(f"smoke29A date_text {sav!r}")
+        if str(sav.get("date_iso")) != "2026-05-20":
+            raise AssertionError(f"smoke29A iso {sav!r}")
+        if str(sav.get("time_text")) != "10:00":
+            raise AssertionError(f"smoke29A time {sav!r}")
+        if "Marco" not in list(sav.get("participants") or []):
+            raise AssertionError(f"smoke29A people {sav!r}")
+        st_a = eng._thread_store.get_state()
+        if st_a.get("open"):
+            raise AssertionError("smoke29A hilo debe cerrarse")
+        if (st_a.get("last_focus") or {}).get("domain") != "event":
+            raise AssertionError("smoke29A lf event")
+        if (st_a.get("last_action") or {}).get("domain") != "event":
+            raise AssertionError("smoke29A la event")
+
+    rb: dict[str, Any] = {
+        "s": "ask",
+        "i": "event",
+        "a": "create",
+        "obj": {"cal_title": "cita con Marco"},
+        "target": None,
+        "q": "¿Qué día y a qué hora quieres poner la cita?",
+        "r": None,
+        "pending": {"field": "date_time"},
+        "ctx": None,
+    }
+
+    with tempfile.TemporaryDirectory() as d_b:
+        base = Path(d_b)
+        eng = _make_engine(base)
+        with patch.object(engine_mod, "ask_gpt", return_value=rb):
+            qb, intent_b, nb, _ = eng.process_message("cita con Marco")
+        if nb is not None:
+            raise AssertionError("smoke29B no debe crear")
+        sb = eng._thread_store.get_state()
+        if not sb.get("open"):
+            raise AssertionError("smoke29B debe abrir")
+        if (sb.get("pending") or {}).get("field") != "date_time":
+            raise AssertionError(f"smoke29B pend {sb!r}")
+        if "?" not in (qb or ""):
+            raise AssertionError(f"smoke29B pregunta {qb!r}")
+
+    rc: dict[str, Any] = {
+        "s": "ask",
+        "i": "event",
+        "a": "create",
+        "obj": {
+            "cal_title": "cita con Marco",
+            "cal_date_text": "miércoles",
+            "cal_time_text": "10:00",
+        },
+        "target": None,
+        "q": "¿Confirmas el día exacto de la cita?",
+        "r": None,
+        "pending": {"field": "date"},
+        "ctx": None,
+    }
+
+    with tempfile.TemporaryDirectory() as d_c:
+        base = Path(d_c)
+        eng = _make_engine(base)
+        with patch.object(engine_mod, "ask_gpt", return_value=rc):
+            qc, intent_c, nc, _ = eng.process_message("x")
+        if nc is not None:
+            raise AssertionError("smoke29C no iso no crear")
+        if not eng._thread_store.get_state().get("open"):
+            raise AssertionError("smoke29C open")
+
+    rd: dict[str, Any] = {
+        "s": "ask",
+        "i": "task",
+        "a": "create",
+        "obj": {
+            "task_title": "comprar leche",
+            "task_priority": "normal",
+            "task_tags": [],
+        },
+        "target": None,
+        "q": "¿Quieres crear la tarea comprar leche?",
+        "r": "He creado la tarea «comprar leche».",
+        "pending": {"field": "confirmation"},
+        "ctx": None,
+    }
+
+    with tempfile.TemporaryDirectory() as d_d:
+        base = Path(d_d)
+        eng = _make_engine(base)
+        with patch.object(engine_mod, "ask_gpt", return_value=rd):
+            vd, intent_d, td, _ = eng.process_message("tarea")
+        if td is None or str(td.get("title")) != "comprar leche":
+            raise AssertionError(f"smoke29D {td!r}")
+        sd = eng._thread_store.get_state()
+        if (sd.get("last_focus") or {}).get("domain") != "task":
+            raise AssertionError(f"smoke29D lf {sd}")
+        if (sd.get("last_action") or {}).get("domain") != "task":
+            raise AssertionError(f"smoke29D la {sd}")
+        if (
+            vd
+            and ("quieres crear" in (vd.lower()) and "¿" in vd)
+        ):
+            raise AssertionError(f"smoke29D pregunta {vd!r}")
+
+    re_: dict[str, Any] = {
+        "s": "ask",
+        "i": "note",
+        "a": "create",
+        "obj": {
+            "note_title": "Idea Aris",
+            "note_content": "Normalizar ask/create completo.",
+            "note_tags": ["Aris"],
+        },
+        "target": None,
+        "q": "¿Quieres guardar esta nota?",
+        "r": "He guardado la nota.",
+        "pending": {"field": "confirmation"},
+        "ctx": None,
+    }
+
+    with tempfile.TemporaryDirectory() as d_e:
+        base = Path(d_e)
+        eng = _make_engine(base)
+        with patch.object(engine_mod, "ask_gpt", return_value=re_):
+            ve, ie, ne_row, _ = eng.process_message("nota idea")
+        if ne_row is None:
+            raise AssertionError("smoke29E nota None")
+        if str(ne_row.get("content")) != "Normalizar ask/create completo.":
+            raise AssertionError(f"smoke29E content {ne_row!r}")
+
+    rf: dict[str, Any] = {
+        "s": "ask",
+        "i": "event",
+        "a": "update",
+        "obj": {"cal_time_text": "10:00"},
+        "target": None,
+        "q": "¿A qué evento te refieres?",
+        "r": None,
+        "pending": {"field": "target_selection"},
+        "ctx": None,
+    }
+
+    with tempfile.TemporaryDirectory() as d_f:
+        base = Path(d_f)
+        eng = _make_engine(base)
+        with patch.object(engine_mod, "ask_gpt", return_value=rf):
+            vf, intent_f, _, _ = eng.process_message("cambia hora")
+
+        sf = eng._thread_store.get_state()
+        if not sf.get("open"):
+            raise AssertionError("smoke29F debe ask")
+        if "?" not in (vf or ""):
+            raise AssertionError(f"smoke29F debía exponer interrogación {vf!r}")
+        if eng._events.list_events():
+            raise AssertionError("smoke29F no debe mutar eventos")
+
+    print("smoke 29 OK (normalize ask/create completo v0.47.36.6)")
+
+
 def main() -> int:
     try:
         smoke_1_2_ambiguous_then_continue()
@@ -4068,6 +4270,7 @@ def main() -> int:
         smoke_26_prefixed_domain_contract()
         smoke_27_last_focus_last_action_and_no_false_success()
         smoke_28_calendar_event_requires_iso_for_civil_integration()
+        smoke_29_normalize_complete_create_ask()
     except AssertionError as e:
         print(f"FAIL: {e}", file=sys.stderr)
         return 1
