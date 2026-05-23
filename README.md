@@ -22,7 +22,14 @@ cd aris_flutter_v0.22
 flutter pub get
 flutter run
 ```
+```bash
+cd /Users/jose/proyectos/aris_flutter_backend/aris_flutter_v0.22  
 
+flutter clean
+flutter pub get
+dart analyze
+flutter build web --release
+```
 (Si tu copia de trabajo usa ya la carpeta `aris_flutter/`, sustituye el `cd` por esa ruta.)
 
 ## Cómo arrancar FastAPI
@@ -30,25 +37,28 @@ flutter run
 Desde el entorno Python del backend (entorno virtual recomendado), instala las dependencias según el proyecto (p. ej. `requirements.txt` cuando exista) y levanta la app, por ejemplo:
 
 ```bash
-cd aris_backend
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
+cd /Users/jose/proyectos/aris_flutter_backend
+
+python3 -m uvicorn backend.main:app --reload
 ```
 
-Ajusta host/puerto según tu configuración. La documentación de endpoints vigente está en `docs/contrato_backend_actual.md`.
+Ajusta host/puerto según tu configuración. La documentación de endpoints vigente está en `docs/versiones/contrato_backend_actual.md`.
 
 ## Integración y estado actual
 
 - **Contrato HTTP:** comunicación futura por HTTP/JSON (REST).
 - **Estado v0.38:** Flutter **no** está cableado al backend; **no** se han añadido llamadas de red obligatorias en la UI.
-- **Mocks:** la app mantiene **repositorios y mocks locales** mientras se ejecuta el plan de integración por versiones (ver `docs/plan_integracion_flutter_backend.md`).
+- **Mocks:** la app mantiene **repositorios y mocks locales** mientras se ejecuta el plan de integración por versiones (ver `docs/versiones/plan_integracion_flutter_backend.md`).
 
 ## Documentación
 
+Índice general: **`docs/README.md`**
+
 | Documento | Descripción |
 |-----------|-------------|
-| `docs/arquitectura_general.md` | Visión, límites y principios entre cliente y servidor. |
-| `docs/estructura_monorepo.md` | Árbol lógico y convenciones de carpetas. |
-| `docs/contrato_backend_actual.md` | Endpoints actuales (método, ruta, uso, estado). |
-| `docs/plan_integracion_flutter_backend.md` | Hitos por versión hasta despliegue local/dev. |
-| `docs/reglas_monorepo.md` | Reglas de arquitectura (equivalente a reglas de editor si no hay `.cursor/rules/`). |
-| `docs/version_0_38_harmonizacion_monorepo.md` | Notas de la versión v0.38. |
+| `docs/versiones/arquitectura_general.md` | Visión, límites y principios entre cliente y servidor. |
+| `docs/versiones/estructura_monorepo.md` | Árbol lógico y convenciones de carpetas. |
+| `docs/versiones/contrato_backend_actual.md` | Endpoints actuales (método, ruta, uso, estado). |
+| `docs/versiones/plan_integracion_flutter_backend.md` | Hitos por versión hasta despliegue local/dev. |
+| `docs/versiones/reglas_monorepo.md` | Reglas de arquitectura. |
+| `aris_flutter_v0.22/docs/versions/` | Notas de versión UI Flutter (v0.49+, tag actual **v0.49.85**). |
